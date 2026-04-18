@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm install:*)",
+      "Bash(pnpm tauri:*)",
+      "Bash(cargo --version)",
+      "Bash(cargo add:*)",
+      "Bash(pnpm add:*)",
+      "Bash(pdal --version)",
+      "Bash(cargo build:*)",
+      "Bash(/c/Users/addub/.cargo/bin/cargo build:*)",
+      "Bash(pnpm exec:*)",
+      "Bash(node:*)",
+      "Bash(grep -E \"\\\\.d\\\\.ts$|^types\")",
+      "WebSearch",
+      "Bash(xargs grep:*)",
+      "Bash(ls /c/Users/addub/Documents/repos/survey-drafting-engine/node_modules/three/examples/jsm/postprocessing/*.d.ts)",
+      "Bash(npx tsc:*)",
+      "Bash(find:*)"
+    ]
+  }
+}

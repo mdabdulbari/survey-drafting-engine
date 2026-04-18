@@ -1,0 +1,16 @@
+@import "tailwindcss";
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  overflow: hidden;
+}
+
+/* Prevent Three.js OrbitControls from changing the cursor to grab/grabbing */
+canvas {
+  cursor: default !important;
+}
