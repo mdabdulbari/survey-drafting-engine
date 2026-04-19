@@ -32,15 +32,16 @@ survey-drafting-engine/
     lib/
       copc-tauri-adapter.ts     ← Routes copc.js HTTP calls → Tauri IPC
       copc-reader.ts            ← Wraps copc.js with adapter
-      coordinate-system.ts     ← Rebasing helpers
+      coordinate-system.ts      ← Rebasing helpers (survey CRS → Y-up scene)
       buffer-pool.ts            ← Pre-allocated Float32Array pool
       lod-manager.ts            ← Frustum culling + screen-space error
+      edl-pass.ts               ← Eye-Dome Lighting ShaderPass
     workers/
       laz-decoder.worker.ts     ← laz-perf off main thread
     components/
-      Viewport.tsx              ← R3F Canvas, OrbitControls
-      MultiViewport.tsx         ← Scissor-based dual camera
+      Viewport.tsx              ← Canvas, camera controls, EDL, ViewCube (currently named MultiViewport.tsx — see M16)
       PointCloud.tsx            ← Reads pool slots, updates BufferGeometry
+      LodController.tsx         ← useFrame driver for LOD evaluation
       FileOpen.tsx              ← File picker → create_project
       ProjectList.tsx           ← List + open existing projects
       ConversionProgress.tsx    ← Progress bar for PDAL conversion
@@ -58,6 +59,7 @@ survey-drafting-engine/
 - **No `new Float32Array()` per node.** All geometry uses the pre-allocated buffer pool.
 - **No blocking the main thread.** Decoding runs in a Web Worker. Conversion runs async in Rust.
 - **No per-frame Zustand subscriptions in hot paths.** Use `usePointCloudStore.getState()` inside `useFrame`.
+- **World is Y-up.** The scene graph follows Three.js's default convention: world +Y is the vertical (gravity) axis. `rebasePoints` emits points with elevation along +Y. Every camera, control, and visual indicator in this codebase assumes Y-up; swapping to Z-up is a coordinated change across `applyOrbit`, `camera.up`, and `rebasePoints`.
 
 ---
 
@@ -84,10 +86,10 @@ survey-drafting-engine/
    serde_json = "1"
    ```
 5. Create `src/components/Viewport.tsx`:
-   - R3F `<Canvas>` filling the window
-   - `<OrbitControls>` from drei
+   - R3F `<Canvas>` filling the window, orthographic camera
    - `<Stats>` from drei (shows fps — leave in for all milestones, remove before ship)
    - Ambient light so the blank scene isn't black
+   - Camera controls are added in M12 — do not add `<OrbitControls>` here (see M12 rationale).
 6. `src/App.tsx` renders `<Viewport />`.
 
 ### Acceptance Test
@@ -153,7 +155,7 @@ Milestone 1 complete.
 7. Create `src/components/FileOpen.tsx`:
    - Button: "Open LAZ File"
    - On click: `open()` from `@tauri-apps/plugin-dialog` with filter `{ name: 'LAZ', extensions: ['laz'] }`
-   - On file selected: call `invoke('create_project', { name: fileName, lazPath })` 
+   - On file selected: call `invoke('create_project', { name: fileName, lazPath })`
    - Store returned `project_id` in Zustand.
 8. Render `<FileOpen />` in `App.tsx`.
 
@@ -431,6 +433,8 @@ Milestone 7 complete (COPC header available, which contains the bounding box).
 
    // Apply after decoding a node's raw point buffer
    // points: Float32Array of [x, y, z, x, y, z, ...]
+   // Emits Y-up scene coordinates (survey Z-up → scene Y-up remapping happens here
+   // if your source CRS differs).
    export function rebasePoints(
      points: Float32Array,
      origin: [number, number, number]
@@ -627,7 +631,7 @@ Milestone 10 complete.
    - Sort `toLoad` by screen-space error descending (highest priority first).
    - Enforce point budget: if loading `toLoad` would exceed 5M, trim lowest-priority items.
 
-2. Wire into `<Viewport />` via `useFrame`:
+2. Create `src/components/LodController.tsx` — a headless component that lives in the scene graph and drives LOD evaluation from `useFrame`:
    ```typescript
    useFrame(({ camera, gl }) => {
      const frustum = new THREE.Frustum();
@@ -652,35 +656,227 @@ Milestone 10 complete.
 
 ---
 
-## Milestone 12: Navigation
+## Milestone 12: Navigation (Custom Turntable Camera)
 
-**Goal:** OrbitControls (pan, orbit, zoom) at 60fps sustained with full 5M point budget loaded.
+**Goal:** Sketchfab-style turntable orbit with pan and zoom. Shift + middle-mouse orbits, middle-mouse pans, wheel zooms. No roll, no pole artifacts at the initial pose. 60fps sustained with 5M points loaded.
 
 ### Dependencies
 
 Milestone 11 complete.
 
+### Why a custom controller, not OrbitControls
+
+`OrbitControls` keeps its own spherical state internally and re-derives camera position every frame from that state. Any `useFrame` hook in the same scene that also writes to `camera.position` (for example, a post-processing or fit-on-load hook) creates a two-master feedback loop: OrbitControls' re-derivation and the external writer fight each frame, producing drift, axis flips, and inconsistent behavior under modifier keys. Owning the full pan/orbit/zoom pipeline in one `useFrame` eliminates that class of bug outright.
+
+This file is also the first place roll can sneak in. `OrbitControls` allows the camera's `up` vector to tilt under certain drag sequences; survey viewers must not roll. The custom controller locks `camera.up = (0, 1, 0)` on every frame, making Z-axis rotation physically impossible.
+
+### World convention (Y-up)
+
+- World +Y is the vertical axis. `rebasePoints` must emit points with elevation on +Y.
+- `camera.up` is `(0, 1, 0)` everywhere — Canvas JSX prop, `applyOrbit` helper, and any preset snap.
+- If you need Z-up (e.g., your CRS wants survey Z preserved as world Z), swap the formulas in `applyOrbit` *and* `camera.up` together — partial changes produce the "airplane upside-down" bug: camera placed below the terrain looking up through it.
+
+### Orbit math (yaw α, pitch φ, radius r)
+
+```
+cam.x = target.x + r · cos(φ) · sin(α)
+cam.y = target.y + r · sin(φ)
+cam.z = target.z + r · cos(φ) · cos(α)
+```
+
+| (yaw, pitch)            | Camera position              | View     |
+|-------------------------|------------------------------|----------|
+| `(0, 0)`                | `(0, 0, r)`   on +Z          | FRONT    |
+| `(+π/2, 0)`             | `(r, 0, 0)`   on +X          | RIGHT    |
+| `(π, 0)`                | `(0, 0, -r)`  on -Z          | BACK     |
+| `(-π/2, 0)`             | `(-r, 0, 0)`  on -X          | LEFT     |
+| `(0, +π/2)`             | `(0, r, 0)`   on +Y          | TOP      |
+| `(0, -π/2)`             | `(0, -r, 0)`  on -Y          | BOTTOM   |
+
+### Pole degeneracy
+
+At `φ = ±π/2` the view axis becomes parallel to the yaw axis (world +Y), so yaw rotation visually reads as roll — the camera spins about its own view direction. This is geometric, not a code bug; two axes collapse into one. Two mitigations:
+
+1. Clamp `pitch` into `[-π/2 + ε, +π/2 - ε]` (use `PITCH_EPS = 0.001`). Top/Bottom presets snap to the clamped value, so they're visually indistinguishable from true top-down while leaving yaw unambiguous on the next drag.
+2. Start at `yaw = 0, pitch = 0` (FRONT) — maximally far from either pole. The first Shift+MMB drag then produces a clean orbit regardless of direction.
+
+### Input handling
+
+- **Middle drag** → grab-style pan in the screen plane. Move `camera.position` *and* `target` by the same delta so orbit radius `r` is preserved; no re-derivation needed on the next frame.
+- **Shift + middle drag** → orbit. `dx → yaw += dx · ORBIT_SPEED`. `dy → pitch += dy · ORBIT_SPEED` (clamped). Drag-right increases yaw so the camera orbits from +Z toward +X (standard Blender / Sketchfab direction).
+- **Wheel** → zoom (orthographic `camera.zoom` only, not radius). Use a multiplicative step (`ZOOM_STEP = 1.1`) so zoom feels proportional at every scale.
+
+### Render-loop ordering
+
+- Camera controls run in `useFrame(..., 0)` — priority 0, before any rendering or post-processing.
+- `applyOrbit` is the sole writer of `camera.position`, `camera.up`, and `camera.matrixWorld`.
+- Any non-default priority anywhere in the scene (e.g. M13's EDL renderer at priority 1) disables R3F's auto-render. The EDL renderer then becomes the sole renderer.
+
+### Auto-fit on load
+
+- Compute `maxSpan = max(xSpan, ySpan, zSpan)` from `copc.info.cube`.
+- Set `cam.zoom = min(size.width, size.height) / (maxSpan * 1.1)`.
+- Reset orbit state to `(yaw=0, pitch=0)`, `target=(0,0,0)`, `radius = INITIAL_RADIUS`.
+
+Using the max of all three spans (not just x/y) keeps the model framed at any orbit pose — no refit needed when the user rotates to a side.
+
 ### Steps
 
-**Frontend:**
-
-1. `<OrbitControls>` from `@react-three/drei` is already in `<Viewport />` from Milestone 1. Verify settings:
-   - `enableDamping={true}` (smooth deceleration)
-   - `dampingFactor={0.05}`
-   - `minDistance` / `maxDistance` set to reasonable survey-scale values (e.g. 0.1m – 5000m)
-   - `panSpeed` / `rotateSpeed` tuned to feel responsive
-
-2. Camera update: on every OrbitControls move, trigger LOD re-evaluation (already handled by `useFrame` in M11 if camera matrix changes are detected).
+1. Remove `<OrbitControls>` from `<Viewport />` (it's absent if you followed M1).
+2. Add orbit state as refs in the viewport component (shared with the ViewCube in M14):
+   ```typescript
+   const yawRef    = useRef(INITIAL_YAW);       // 0
+   const pitchRef  = useRef(INITIAL_PITCH);     // 0
+   const radiusRef = useRef(INITIAL_RADIUS);    // 10_000
+   const targetRef = useRef(new THREE.Vector3(0, 0, 0));
+   ```
+3. Write the `applyOrbit` helper (Y-up formulas above). It writes position, sets `up = (0,1,0)`, calls `lookAt(target)`, and refreshes `matrixWorld`.
+4. Write a `<CameraControls>` child component that:
+   - Registers pointer-down / pointer-move / pointer-up / wheel listeners on `gl.domElement`.
+   - Captures the pointer on middle-button down so drags keep working off-canvas.
+   - Branches on `e.shiftKey` at pointer-down to pick `pan` or `orbit` mode.
+   - Runs `useFrame((state) => applyOrbit(state.camera, targetRef.current, yawRef.current, pitchRef.current, radiusRef.current), 0)`.
+   - Runs the auto-fit `useEffect` keyed on `copc` and `size`.
 
 ### Acceptance Test
 
-- Pan, orbit, and zoom with 5M points loaded.
-- Stats panel holds ≥ 60fps throughout all navigation modes.
-- No stuttering or jank during continuous orbit.
+- Shift+MMB horizontal drag orbits smoothly (no barrel roll, no flip at any pitch in the allowed range).
+- Shift+MMB vertical drag tilts pitch; clamped at top and bottom without jumping.
+- MMB drag pans; the point under the cursor stays under the cursor as the scene translates.
+- Wheel zooms without affecting radius or orientation.
+- Initial load renders a FRONT elevation view, terrain right-side up (not mirrored, not flipped).
+- Stats panel holds ≥ 60fps with 5M points during continuous orbit.
 
 ---
 
-## Milestone 13: Persistence
+## Milestone 13: Eye-Dome Lighting
+
+**Goal:** EDL post-processing renders point edges and depth discontinuities as dark outlines, so adjacent features separate visually. 60fps sustained with EDL + 5M points. No depth-texture feedback artifacts (halos, smearing, ghosting).
+
+### Dependencies
+
+Milestone 12 complete.
+
+### Pipeline
+
+```
+Scene ─► RenderPass ─► [rt1 color + rt1 depth]
+                │
+                ▼
+            EdlPass (samples rt1 depth, writes outline)
+                │
+                ▼
+            OutputPass ─► canvas
+```
+
+### Depth-texture ownership (the trap)
+
+`EffectComposer` ping-pongs between `renderTarget1` and `renderTarget2` across passes. If *both* targets share a `DepthTexture`, `EdlPass` ends up reading the depth buffer that the previous pass is still writing to — a one-frame feedback loop that shows up as ghosting or outlines smearing across the image.
+
+Fix: attach `DepthTexture` to `renderTarget1` only. `RenderPass` writes to rt1, so rt1 carries the correct depth. Subsequent `ShaderPass`/`OutputPass` reads color only and doesn't need a depth attachment on rt2.
+
+```typescript
+composer.renderTarget1.depthTexture = new THREE.DepthTexture(w, h);
+composer.renderTarget2.depthTexture = null;
+```
+
+### Render-loop ownership
+
+- `<EdlRenderer>` owns the composer and runs `useFrame(() => composer.render(), 1)` — priority 1, after the camera controls at priority 0.
+- Because a non-zero priority exists, R3F's auto-render is disabled and the composer call is the sole renderer.
+- On resize, dispose the old composer and build a fresh one; attach the depth texture to rt1 only on the new composer.
+
+### Steps
+
+1. Create `src/lib/edl-pass.ts`:
+   - Extend `ShaderPass` (or use `Pass` directly).
+   - Uniforms: `tDiffuse` (color), `tDepth`, `resolution`, `strength`, `neighbourRadius`.
+   - Fragment shader samples depth at 4–8 neighbours, computes log-depth differences, darkens the pixel proportionally.
+2. Create `src/components/EdlRenderer.tsx`:
+   - `useEffect` creates `EffectComposer`, `RenderPass`, `EdlPass`, `OutputPass`.
+   - Attach `DepthTexture` to `renderTarget1` only.
+   - `useFrame(() => composer.render(), 1)`.
+   - Cleanup: dispose composer and depth texture.
+3. Add `<EdlRenderer />` to `<Viewport />` after `<PointCloud />` and `<LodController />`.
+
+### Acceptance Test
+
+- Points render with visible dark outlines where depth changes sharply (adjacent features separate clearly).
+- No halos, ghosting, or smearing anywhere on the screen (would indicate depth feedback).
+- Resize the window several times — no residual artifacts after targets are recreated.
+- Stats panel shows ≥ 60fps with EDL active and 5M points loaded.
+- Toggling EDL off (temporarily bypassing the composer) produces a plain point render for visual A/B.
+
+---
+
+## Milestone 14: ViewCube Overlay
+
+**Goal:** A small 3D cube in the top-right corner of the viewport mirrors camera orientation in real time. Six preset buttons (Top / Front / Right / Bot / Back / Left) snap the camera to canonical views. Labels match what the scene shows.
+
+### Dependencies
+
+Milestone 12 complete.
+
+### Why CSS 3D, not a three.js sub-scene
+
+- Zero impact on the main render loop — the cube is a DOM element, not geometry.
+- Always on top of the canvas; never obscured by points or fighting with EDL.
+- Trivial click handling via normal DOM events; each face is its own `<div>`.
+
+### Cube face placements (classic CSS pattern, Y-down CSS space)
+
+```
+Front:   translateZ(H)                 — +Z face, toward viewer at rest
+Back:    rotateY(180deg) translateZ(H) — -Z face
+Right:   rotateY( 90deg) translateZ(H) — +X face, right side
+Left:    rotateY(-90deg) translateZ(H) — -X face, left side
+Top:     rotateX( 90deg) translateZ(H) — visually above
+Bottom:  rotateX(-90deg) translateZ(H) — visually below
+```
+
+The cube container mirrors camera orientation with:
+
+```
+transform: rotateX(-pitchDeg) rotateY(-yawDeg)
+```
+
+The cube is a CSS artifact — its `(yaw, pitch) → transform` mapping does **not** depend on whether the 3D world is Y-up or Z-up. Only the camera math does.
+
+### Preset values
+
+| Button | yaw       | pitch       |
+|--------|-----------|-------------|
+| Top    | `0`       | `PITCH_MAX` |
+| Front  | `0`       | `0`         |
+| Right  | `+π/2`    | `0`         |
+| Bot    | `0`       | `PITCH_MIN` |
+| Back   | `π`       | `0`         |
+| Left   | `-π/2`    | `0`         |
+
+### rAF loop for cube rotation
+
+- Avoid React re-renders on camera changes. The cube's `style.transform` is mutated inside a `requestAnimationFrame` loop that reads `yawRef.current` / `pitchRef.current` directly.
+- The same refs are shared between `<CameraControls>` and `<ViewCube>` — writing to them in one place is immediately visible in the other.
+
+### Steps
+
+1. Create `<ViewCube>` component (or inline in the viewport for small codebases). It takes `yawRef` and `pitchRef` as props.
+2. Render as an HTML overlay positioned `absolute, top: 16, right: 16`, **outside** the Canvas — the cube lives in the DOM, the point cloud lives in WebGL.
+3. rAF loop: read refs, write `cubeRef.current.style.transform = `rotateX(${-pitchDeg}deg) rotateY(${-yawDeg}deg)``.
+4. Each face `<div>` has an `onClick` that snaps to the matching preset (writes yaw/pitch refs).
+5. Below the cube, a 3×2 grid of preset buttons using the table above.
+
+### Acceptance Test
+
+- Orbiting in the viewport rotates the cube in sync, no lag.
+- Clicking each preset button snaps the camera to the correct view — labels match the scene (FRONT shows elevation, TOP shows plan view, etc.).
+- Clicking a cube face directly snaps to that face's view.
+- No React re-renders triggered by cube animation (confirm in React DevTools Profiler — the cube's parent component should not re-render during continuous orbit).
+- Cube and buttons remain visible and interactive over the point cloud and EDL output.
+
+---
+
+## Milestone 15: Persistence
 
 **Goal:** Project list persists across app restarts. Reopening an existing project skips conversion. First points visible < 3s on reopen.
 
@@ -718,13 +914,21 @@ Milestone 4 complete (DB schema already exists from M2; mmap setup from M4).
 
 ---
 
-## Milestone 14: Multi-Viewport
+## Milestone 16: Multi-Viewport Split
 
-**Goal:** Second camera (top-down orthographic view) rendered in the same R3F canvas via `gl.setScissor`. Both viewports maintain ≥ 60fps simultaneously.
+**Goal:** Second camera (top-down orthographic) rendered in the same R3F canvas via `gl.setScissor`. Both viewports maintain ≥ 60fps simultaneously.
 
 ### Dependencies
 
-Milestone 12 complete.
+Milestone 14 complete.
+
+### Naming note
+
+The single-viewport component built in M1–M14 currently lives at `src/components/MultiViewport.tsx` (historical name from before this milestone existed). As part of this milestone:
+
+- Rename the existing file to `Viewport.tsx`.
+- Create a new `MultiViewport.tsx` that composes two viewport cameras plus the scissor logic below.
+- Both cameras share the same `<PointCloud>`, `<LodController>`, and `<EdlRenderer>`; only the camera-control and cube overlays differ.
 
 ### Steps
 
@@ -732,34 +936,35 @@ Milestone 12 complete.
 
 1. Create `src/components/MultiViewport.tsx`. Replace `<Viewport />` in `App.tsx` with `<MultiViewport />`.
 
-2. Layout: main view (left, ~70% width) + top view (right, ~30% width). Implemented with `useFrame` and `gl.setScissor`:
+2. Layout: main view (left, ~70% width) + top view (right, ~30% width). Implemented with `useFrame` + `gl.setScissor`:
 
    ```typescript
    useFrame(({ gl, scene }) => {
      const { width, height } = gl.domElement.getBoundingClientRect();
      const splitX = Math.floor(width * 0.7);
 
-     // Main view (left panel)
+     // Main view (left panel) — camera controlled by M12 CameraControls
      gl.setScissor(0, 0, splitX, height);
      gl.setViewport(0, 0, splitX, height);
      gl.setScissorTest(true);
      mainCamera.aspect = splitX / height;
      mainCamera.updateProjectionMatrix();
-     gl.render(scene, mainCamera);
+     composer.render();  // EDL on main view
 
-     // Top view (right panel)
+     // Top view (right panel) — fixed top-down camera, no EDL (plain render is fine)
      gl.setScissor(splitX, 0, width - splitX, height);
      gl.setViewport(splitX, 0, width - splitX, height);
-     topCamera.position.set(0, 500, 0);  // survey scale — tune based on point cloud bbox
+     topCamera.position.set(0, 500, 0);  // Y-up: +Y is above
+     topCamera.up.set(0, 0, -1);         // screen-up = -Z (north, if your CRS uses it)
      topCamera.lookAt(0, 0, 0);
      topCamera.updateProjectionMatrix();
      gl.render(scene, topCamera);
    });
    ```
 
-3. `OrbitControls` applies to `mainCamera` only. Top camera is fixed (top-down orthographic).
+3. The M12 camera controller applies to `mainCamera` only. The top camera is fixed — no pointer handlers bound to it.
 
-4. Set `frameloop="never"` on the R3F `<Canvas>` and call `gl.render` manually inside `useFrame` (as above) to prevent R3F's default auto-render from double-rendering.
+4. Set `frameloop="never"` on the R3F `<Canvas>` (or rely on non-zero useFrame priorities as in M13) to prevent R3F's default auto-render from double-rendering over the scissor splits.
 
 ### Acceptance Test
 
@@ -767,6 +972,7 @@ Milestone 12 complete.
 - Orbiting in the main view does not affect the top view camera.
 - Stats panel shows ≥ 60fps with both viewports rendering.
 - No visible seam or artifact at the scissor boundary.
+- EDL outlines visible in the main view only (or in both, if you extend the composer path — your call).
 
 ---
 
@@ -783,4 +989,8 @@ Run this after all milestones are complete:
 | IPC round-trip (1MB) | Benchmark in M5 | < 10ms |
 | Main thread during decode | DevTools Performance tab | No long tasks |
 | Point buffer memory cap | DevTools Memory | ≤ 60MB for positions (5M × 3 × 4B) |
+| Sustained fps with EDL active | Stats panel during orbit | ≥ 60fps |
+| EDL depth artifacts after resize | Visual inspection at several window sizes | None |
+| ViewCube sync latency | Visual — orbit continuously | No perceptible lag |
+| No React re-renders on orbit | React DevTools Profiler during drag | 0 render commits in viewport tree |
 | Both viewports fps | Stats panel | ≥ 60fps each |

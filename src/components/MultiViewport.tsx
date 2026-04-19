@@ -1,42 +1,89 @@
 /**
  * Single-viewport renderer with Eye-Dome Lighting.
  *
- * Full-canvas top-down orthographic (plan) view.  No rotation — left/right mouse
- * buttons pan, scroll wheel zooms.  EDL post-processing sharpens edge outlines.
+ * Full-canvas orthographic view with Sketchfab-style turntable orbit.
+ * Middle-drag pans, Shift+Middle-drag orbits, wheel zooms.  EDL post-
+ * processing sharpens edge outlines.
  *
- * Coordinate mapping (from rebasePoints in coordinate-system.ts):
- *   Survey X (easting)   → Three.js X
- *   Survey Y (northing)  → Three.js Y   ← horizontal, north is +Y
- *   Survey Z (elevation) → Three.js Z   ← vertical, up is +Z
+ * ──────────────────────────────────────────────────────────────────────
+ * World convention (Y-up — Three.js default)
+ * ──────────────────────────────────────────────────────────────────────
  *
- * Camera sits at high Z (above the scene), looks down −Z, north (+Y) is up.
+ * The scene graph is Y-up: the vertical (gravity) axis is world +Y.
+ * Whatever transform the loader/rebaser applies (survey CRS → scene),
+ * points end up with their elevation along +Y.  Empirically, placing
+ * the camera at (0, -r, 0) with up=+Z and looking at origin produced a
+ * flipped plan view — "airplane upside down, wheels up" — which is only
+ * possible if the camera was *below* the model looking upward through
+ * it.  That pins the vertical axis to +Y.
  *
- * Camera controls (no OrbitControls — fully custom to avoid state conflicts):
- *   Middle drag              → pan (grab-style: scene follows cursor)
- *   Shift + Middle drag      → turntable orbit:
- *                               horizontal → orbit around Z axis (yaw)
- *                               vertical   → tilt toward/away from horizon (pitch)
- *   Scroll wheel             → zoom (orthographic camera.zoom)
+ * If you later change rebasePoints to emit Z-up data, swap the formula
+ * in `applyOrbit` and set `camera.up` to (0, 0, 1); the rest of this
+ * file (event handlers, cube, presets) doesn't depend on world
+ * convention.
  *
- * Z-up turntable orbit (elev=0 → top-down, elev=π/2 → side view):
+ * ──────────────────────────────────────────────────────────────────────
+ * Camera orbit convention (yaw / pitch, Y-up)
+ * ──────────────────────────────────────────────────────────────────────
  *
- *   Camera position:
- *     x = target.x + r·sin(elev)·sin(az)
- *     y = target.y + r·sin(elev)·cos(az)
- *     z = target.z + r·cos(elev)
+ *   yaw α    — rotation around world Y (vertical), measured from +Z.
+ *               α = 0        → camera on +Z side, looking -Z   (FRONT)
+ *               α = +π/2     → camera on +X side, looking -X   (RIGHT)
+ *               α = ±π       → camera on -Z side, looking +Z   (BACK)
+ *               α = -π/2     → camera on -X side, looking +X   (LEFT)
  *
- *   Camera up = fixed (0, 0, 1) — prevents roll.  Elev is clamped away
- *   from the poles to avoid the lookAt degeneracy when view ∥ up.
- *   Initial az = π places camera south of target → plan view has east-right,
- *   north-up orientation.
+ *   pitch φ  — elevation above horizon.
+ *               φ = 0        → camera on horizon plane (XZ), elevation views
+ *               φ = +π/2     → camera directly above target    (TOP / plan)
+ *               φ = -π/2     → camera directly below target    (BOTTOM)
  *
- * Depth texture ownership:
- *   EffectComposer internally clones its render target, which would share the
- *   same DepthTexture reference across both buffers → framebuffer feedback loop
- *   when EdlPass reads tDepth while rendering to the same texture attachment.
- *   Fix: assign an independent DepthTexture only to renderTarget1 (written by
- *   RenderPass).  renderTarget2 gets no depth texture — ShaderPass / OutputPass
- *   never need a depth attachment.
+ *   Cartesian:
+ *      cam.x = target.x + r · cos(φ) · sin(α)
+ *      cam.y = target.y + r · sin(φ)
+ *      cam.z = target.z + r · cos(φ) · cos(α)
+ *
+ *   camera.up is *always* world +Y — yaw and pitch never touch roll.
+ *
+ * Pole degeneracy
+ *   At φ = ±π/2 the view axis becomes parallel to the yaw axis (world Y),
+ *   so a yaw rotation visually reads as roll (camera spins about its own
+ *   view direction).  This is geometric, not a bug: clamp pitch away
+ *   from the poles by a small epsilon and start off-pole so the first
+ *   drag yields an unambiguous orbit.  Initial pose is FRONT
+ *   (yaw = 0, pitch = 0): purely horizontal, maximally far from either
+ *   pole.
+ *
+ * Input handling
+ *   Middle drag              → pan in the screen plane (scene follows cursor)
+ *   Shift + middle drag      → orbit:
+ *                               horizontal dx  →  yaw   += dx · speed
+ *                               vertical   dy  →  pitch += dy · speed
+ *   Scroll wheel             → zoom (orthographic camera.zoom only)
+ *
+ *   Drag-right increases yaw → camera orbits around +Y from +Z toward +X
+ *   (standard Sketchfab / Blender turntable).  Drag-down increases
+ *   pitch → camera rises → more of the top shows.
+ *
+ * Why a custom controller instead of OrbitControls
+ *   OrbitControls keeps its own spherical state internally and re-derives
+ *   it from camera.position each frame.  Running a useFrame that also
+ *   writes camera.position creates a two-master feedback loop where the
+ *   two systems fight every frame and axes drift.  Owning the whole
+ *   pan/orbit/zoom pipeline here eliminates that class of bug.
+ *
+ * Render loop
+ *   CameraControls.useFrame runs at priority 0 (before EDL) and is the
+ *   sole writer of camera.position / camera.up / camera.matrixWorld.
+ *   EdlRenderer.useFrame runs at priority 1 and drives the composer.
+ *   Both rely on the frame order guarantees R3F provides.
+ *
+ * Depth texture ownership
+ *   EffectComposer internally ping-pongs between renderTarget1 and
+ *   renderTarget2; if both share a DepthTexture, EdlPass reads the
+ *   texture it's writing to → feedback loop.  Fix: attach the depth
+ *   texture only to renderTarget1 (written by RenderPass).  renderTarget2
+ *   never needs a depth attachment — ShaderPass / OutputPass don't read
+ *   depth.
  */
 
 import React, { useEffect, useRef } from "react";
@@ -51,22 +98,9 @@ import { PointCloud } from "./PointCloud";
 import { EdlPass } from "../lib/edl-pass";
 import { usePointCloudStore } from "../store/pointCloudStore";
 
-// ---------------------------------------------------------------------------
-// CameraControls — owns all camera interaction (pan, orbit, zoom)
-// ---------------------------------------------------------------------------
-//
-// No OrbitControls — using it alongside a custom orbit useFrame causes the two
-// systems to fight each other every frame (OrbitControls resets spherical state
-// from camera.position, then our useFrame re-overrides, resulting in jitter or
-// wrong axes).  Implementing everything here is cleaner and free of conflicts.
-//
-// Pan formula (grab-style):
-//   delta = cameraRight * (dx / zoom) + cameraUp * (-dy / zoom)
-//   Both camera.position and target move by delta — orbit pivot follows pan.
-//
-// The useFrame orbit formula runs every frame and is the single authority on
-// camera.position.  Pan preserves r because it adds the same delta to both
-// camera.position and target, so |camera.position − target| is unchanged.
+// ───────────────────────────────────────────────────────────────────────────
+// Orbit constants & helpers
+// ───────────────────────────────────────────────────────────────────────────
 
 const ORBIT_SPEED = 0.005; // radians per pixel
 const ZOOM_STEP = 1.1; // wheel notch factor
@@ -541,14 +575,14 @@ function ViewCube({ yawRef, pitchRef }: ViewCubeProps) {
     </div>
   );
 }
-// ---------------------------------------------------------------------------
-// MultiViewport (single viewport)
-// ---------------------------------------------------------------------------
+
+// ───────────────────────────────────────────────────────────────────────────
+// MultiViewport
+// ───────────────────────────────────────────────────────────────────────────
 
 export function MultiViewport() {
-  // Orbit state lives here so both CameraControls (inside Canvas) and
-  // ViewCube (HTML overlay outside Canvas) share the same ref objects.
-  // Start at elev=MIN_ELEV (≈top-down). az=0 puts camera at +Y.
+  // Orbit state lives here so CameraControls (inside Canvas) and ViewCube
+  // (HTML overlay outside Canvas) share the exact same ref objects.
   const yawRef = useRef(INITIAL_YAW);
   const pitchRef = useRef(INITIAL_PITCH);
   const radiusRef = useRef(INITIAL_RADIUS);
