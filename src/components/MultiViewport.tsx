@@ -55,14 +55,16 @@
  *
  * Input handling
  *   Middle drag              → pan in the screen plane (scene follows cursor)
- *   Shift + middle drag      → orbit:
- *                               horizontal dx  →  yaw   += dx · speed
+ *   Shift + middle drag      → grab-style orbit:
+ *                               horizontal dx  →  yaw   -= dx · speed
  *                               vertical   dy  →  pitch += dy · speed
  *   Scroll wheel             → zoom (orthographic camera.zoom only)
  *
- *   Drag-right increases yaw → camera orbits around +Y from +Z toward +X
- *   (standard Sketchfab / Blender turntable).  Drag-down increases
- *   pitch → camera rises → more of the top shows.
+ *   Drag-right decreases yaw → camera orbits around +Y from +Z toward -X,
+ *   so the object visually rotates right with the cursor.  Drag-down
+ *   increases pitch → camera rises → object's top edge moves down in
+ *   screen space, again following the cursor.  Both axes feel like
+ *   grabbing and dragging the model directly.
  *
  * Why a custom controller instead of OrbitControls
  *   OrbitControls keeps its own spherical state internally and re-derives
@@ -221,9 +223,12 @@ function CameraControls({ yawRef, pitchRef, radiusRef, targetRef }: OrbitRefs) {
       lastY = e.clientY;
 
       if (mode === "orbit") {
-        // Yaw:   drag right (+dx) → camera orbits from +Z toward +X.
-        // Pitch: drag down  (+dy) → camera tilts up, more top-face visible.
-        yawRef.current += dx * ORBIT_SPEED;
+        // Grab-style orbit: cursor and object move in the same direction.
+        // Yaw:   drag right (+dx) → camera orbits from +Z toward -X
+        //        → object visually rotates right with the cursor.
+        // Pitch: drag down  (+dy) → camera rises → object's top edge moves
+        //        down in screen space, again following the cursor.
+        yawRef.current -= dx * ORBIT_SPEED;
         pitchRef.current = Math.max(
           PITCH_MIN,
           Math.min(PITCH_MAX, pitchRef.current + dy * ORBIT_SPEED),
@@ -389,13 +394,16 @@ const FACE_BASE: React.CSSProperties = {
   alignItems: "center",
   justifyContent: "center",
   fontSize: 10,
-  fontWeight: 700,
-  letterSpacing: "0.5px",
-  color: "#fff",
-  border: "1px solid rgba(255,255,255,0.25)",
+  fontWeight: 600,
+  letterSpacing: "1px",
+  textTransform: "uppercase",
+  color: "rgba(255,255,255,0.92)",
+  border: "1px solid rgba(255,255,255,0.12)",
   boxSizing: "border-box",
   cursor: "pointer",
   userSelect: "none",
+  transition: "background 120ms ease, border-color 120ms ease",
+  backdropFilter: "blur(2px)",
 };
 
 type Preset = { label: string; yaw: number; pitch: number };
@@ -438,6 +446,17 @@ function ViewCube({ yawRef, pitchRef }: ViewCubeProps) {
     pitchRef.current = pitch;
   };
 
+  // Cube face palette — top is brightest, bottom is darkest, sides paired so
+  // opposing faces feel related but distinguishable.
+  const FACE_COLORS = {
+    top: "linear-gradient(135deg, rgba(96,165,250,0.85), rgba(59,130,246,0.78))",
+    bottom: "linear-gradient(135deg, rgba(30,58,138,0.82), rgba(17,39,103,0.82))",
+    front: "linear-gradient(135deg, rgba(59,130,246,0.78), rgba(37,99,235,0.78))",
+    back: "linear-gradient(135deg, rgba(37,99,235,0.78), rgba(29,78,216,0.82))",
+    right: "linear-gradient(135deg, rgba(45,108,222,0.78), rgba(30,80,180,0.82))",
+    left: "linear-gradient(135deg, rgba(30,80,180,0.82), rgba(20,60,150,0.85))",
+  } as const;
+
   return (
     <div
       style={{
@@ -448,7 +467,14 @@ function ViewCube({ yawRef, pitchRef }: ViewCubeProps) {
         display: "flex",
         flexDirection: "column",
         alignItems: "center",
-        gap: 8,
+        gap: 10,
+        padding: "12px 12px 10px",
+        borderRadius: 14,
+        background: "rgba(255,255,255,0.04)",
+        border: "1px solid rgba(255,255,255,0.10)",
+        backdropFilter: "blur(12px)",
+        WebkitBackdropFilter: "blur(12px)",
+        boxShadow: "0 8px 32px rgba(0,0,0,0.45)",
       }}
     >
       {/* 3D cube — rotates to mirror which face the camera is looking at */}
@@ -456,7 +482,7 @@ function ViewCube({ yawRef, pitchRef }: ViewCubeProps) {
         style={{
           width: CUBE_S,
           height: CUBE_S,
-          perspective: 260,
+          perspective: 280,
           flexShrink: 0,
         }}
       >
@@ -473,7 +499,7 @@ function ViewCube({ yawRef, pitchRef }: ViewCubeProps) {
           <div
             style={{
               ...FACE_BASE,
-              background: "rgba(30,100,210,0.88)",
+              background: FACE_COLORS.front,
               transform: `translateZ(${CUBE_H}px)`,
             }}
             onClick={() => snap(0, 0)}
@@ -485,7 +511,7 @@ function ViewCube({ yawRef, pitchRef }: ViewCubeProps) {
           <div
             style={{
               ...FACE_BASE,
-              background: "rgba(20,80,175,0.88)",
+              background: FACE_COLORS.back,
               transform: `rotateY(180deg) translateZ(${CUBE_H}px)`,
             }}
             onClick={() => snap(Math.PI, 0)}
@@ -497,7 +523,7 @@ function ViewCube({ yawRef, pitchRef }: ViewCubeProps) {
           <div
             style={{
               ...FACE_BASE,
-              background: "rgba(25,90,190,0.88)",
+              background: FACE_COLORS.right,
               transform: `rotateY(90deg) translateZ(${CUBE_H}px)`,
             }}
             onClick={() => snap(Math.PI / 2, 0)}
@@ -509,7 +535,7 @@ function ViewCube({ yawRef, pitchRef }: ViewCubeProps) {
           <div
             style={{
               ...FACE_BASE,
-              background: "rgba(25,90,190,0.88)",
+              background: FACE_COLORS.left,
               transform: `rotateY(-90deg) translateZ(${CUBE_H}px)`,
             }}
             onClick={() => snap(-Math.PI / 2, 0)}
@@ -521,7 +547,7 @@ function ViewCube({ yawRef, pitchRef }: ViewCubeProps) {
           <div
             style={{
               ...FACE_BASE,
-              background: "rgba(50,140,240,0.92)",
+              background: FACE_COLORS.top,
               transform: `rotateX(90deg) translateZ(${CUBE_H}px)`,
             }}
             onClick={() => snap(0, PITCH_MAX)}
@@ -533,7 +559,7 @@ function ViewCube({ yawRef, pitchRef }: ViewCubeProps) {
           <div
             style={{
               ...FACE_BASE,
-              background: "rgba(15,65,160,0.88)",
+              background: FACE_COLORS.bottom,
               transform: `rotateX(-90deg) translateZ(${CUBE_H}px)`,
             }}
             onClick={() => snap(0, PITCH_MIN)}
@@ -543,29 +569,52 @@ function ViewCube({ yawRef, pitchRef }: ViewCubeProps) {
         </div>
       </div>
 
+      {/* Hairline divider between cube and preset row */}
+      <div
+        style={{
+          width: "100%",
+          height: 1,
+          background:
+            "linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent)",
+        }}
+      />
+
       {/* Always-visible preset buttons — all 6 views one click away */}
       <div
         style={{
           display: "grid",
           gridTemplateColumns: "repeat(3, 1fr)",
-          gap: 3,
-          width: CUBE_S + 16,
+          gap: 4,
+          width: CUBE_S,
         }}
       >
         {PRESETS.map(({ label, yaw, pitch }) => (
           <button
             key={label}
             onClick={() => snap(yaw, pitch)}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "rgba(255,255,255,0.10)";
+              e.currentTarget.style.borderColor = "rgba(255,255,255,0.22)";
+              e.currentTarget.style.color = "rgba(255,255,255,0.95)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "rgba(255,255,255,0.04)";
+              e.currentTarget.style.borderColor = "rgba(255,255,255,0.10)";
+              e.currentTarget.style.color = "rgba(255,255,255,0.7)";
+            }}
             style={{
-              background: "rgba(20,70,160,0.80)",
-              border: "1px solid rgba(100,160,255,0.35)",
-              color: "#bdd",
-              fontSize: 10,
+              background: "rgba(255,255,255,0.04)",
+              border: "1px solid rgba(255,255,255,0.10)",
+              color: "rgba(255,255,255,0.7)",
+              fontSize: 9,
               fontWeight: 600,
-              padding: "3px 2px",
+              padding: "4px 2px",
               cursor: "pointer",
-              borderRadius: 3,
-              letterSpacing: "0.3px",
+              borderRadius: 5,
+              letterSpacing: "0.6px",
+              textTransform: "uppercase",
+              transition:
+                "background 120ms ease, border-color 120ms ease, color 120ms ease",
             }}
           >
             {label}
@@ -594,7 +643,30 @@ export function MultiViewport() {
         position: "relative",
         width: "100vw",
         height: "100vh",
-        background: "#111",
+        backgroundColor: "#05070b",
+        // Layered backdrop: model floats in graph-paper space.
+        // Layer order is front → back (CSS paints first listed on top):
+        //   1. center-fade mask  — darkens grid near the middle
+        //   2. major grid (V, H) — every 120 px
+        //   3. minor grid (V, H) — every 24 px
+        //   4. base radial       — corner darkening
+        backgroundImage: [
+          "radial-gradient(ellipse 55% 45% at 50% 45%, rgba(5,7,11,0.95) 0%, rgba(5,7,11,0.55) 40%, rgba(5,7,11,0) 75%)",
+          "linear-gradient(rgba(140,180,220,0.10) 1px, transparent 1px)",
+          "linear-gradient(90deg, rgba(140,180,220,0.10) 1px, transparent 1px)",
+          "linear-gradient(rgba(120,160,200,0.05) 1px, transparent 1px)",
+          "linear-gradient(90deg, rgba(120,160,200,0.05) 1px, transparent 1px)",
+          "radial-gradient(ellipse at 50% 35%, #131a26 0%, #0a0e15 60%, #05070b 100%)",
+        ].join(", "),
+        backgroundSize: [
+          "100% 100%",
+          "120px 120px",
+          "120px 120px",
+          "24px 24px",
+          "24px 24px",
+          "100% 100%",
+        ].join(", "),
+        backgroundPosition: "center center",
       }}
     >
       <Canvas

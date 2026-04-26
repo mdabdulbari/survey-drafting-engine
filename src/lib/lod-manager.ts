@@ -54,7 +54,7 @@ function childKeys(key: string): string[] {
 
 export class LodManager {
   private readonly rootBounds: Bounds;
-  private readonly nodes: Hierarchy.Node.Map;
+  public readonly nodes: Hierarchy.Node.Map;
   private readonly spacing: number;
   private readonly origin: Origin;
   private readonly errorThresholdPixels: number;

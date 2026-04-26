@@ -25,6 +25,8 @@ pub fn run() {
             commands::project::create_project,
             commands::project::open_project,
             commands::project::list_projects,
+            commands::project::delete_project,
+            commands::project::reveal_in_folder,
             commands::conversion::convert_to_copc,
             commands::ipc::read_copc_range,
         ])

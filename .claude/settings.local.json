@@ -16,7 +16,11 @@
       "Bash(xargs grep:*)",
       "Bash(ls /c/Users/addub/Documents/repos/survey-drafting-engine/node_modules/three/examples/jsm/postprocessing/*.d.ts)",
       "Bash(npx tsc:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(cargo check *)",
+      "Bash(rm src/components/FileOpen.tsx src/components/ProjectList.tsx)",
+      "Read(//c/c/Users/addub/repos/survey-drafting-engine/src/**)",
+      "Bash(npx vite *)"
     ]
   }
 }

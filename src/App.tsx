@@ -3,9 +3,8 @@ import { openProject, startConversion } from "./ipc/commands";
 import { loadCopc } from "./lib/copc-reader";
 import { usePointCloudStore } from "./store/pointCloudStore";
 import { MultiViewport } from "./components/MultiViewport";
-import { FileOpen } from "./components/FileOpen";
 import { ConversionProgress } from "./components/ConversionProgress";
-import { ProjectList } from "./components/ProjectList";
+import { Launcher } from "./components/launcher/Launcher";
 import { HUD } from "./components/HUD";
 import { BenchmarkIPC } from "./components/BenchmarkIPC";
 import { Overlay } from "./components/ui/Overlay";
@@ -15,9 +14,7 @@ import type { ProjectMeta } from "./ipc/types";
 function App() {
   const [projectId, setProjectId] = useState<string | null>(null);
   const [project, setProject] = useState<ProjectMeta | null>(null);
-  const [phase, setPhase] = useState<AppPhase>("projectList");
-
-  // ── New project: file picker → conversion → ready ──────────────────────
+  const [phase, setPhase] = useState<AppPhase>("launcher");
 
   function handleProjectCreated(id: string) {
     setProjectId(id);
@@ -36,7 +33,12 @@ function App() {
     }
   }
 
-  // ── Existing project: list → open → ready ──────────────────────────────
+  function handleBackToLauncher() {
+    usePointCloudStore.getState().reset();
+    setProject(null);
+    setProjectId(null);
+    setPhase("launcher");
+  }
 
   async function handleOpenExisting(p: ProjectMeta) {
     try {
@@ -61,21 +63,18 @@ function App() {
 
   // ── Render ─────────────────────────────────────────────────────────────
 
+  if (phase === "launcher") {
+    return (
+      <Launcher
+        onOpenProject={handleOpenExisting}
+        onProjectCreated={handleProjectCreated}
+      />
+    );
+  }
+
   return (
     <div className="relative w-screen h-screen">
       <MultiViewport />
-
-      {phase === "projectList" && (
-        <Overlay>
-          <ProjectList onOpen={handleOpenExisting} onNew={() => setPhase("idle")} />
-        </Overlay>
-      )}
-
-      {phase === "idle" && (
-        <Overlay>
-          <FileOpen onProjectCreated={handleProjectCreated} />
-        </Overlay>
-      )}
 
       {phase === "converting" && projectId && (
         <Overlay>
@@ -85,7 +84,7 @@ function App() {
 
       {phase === "ready" && project && (
         <>
-          <HUD project={project} />
+          <HUD project={project} onBack={handleBackToLauncher} />
           {/* TODO: remove BenchmarkIPC once M5 acceptance test passes */}
           <BenchmarkIPC projectId={project.id} />
         </>

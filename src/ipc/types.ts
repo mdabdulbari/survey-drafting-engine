@@ -10,6 +10,9 @@ export interface ProjectMeta {
   copc_path: string;
   copc_ready: boolean;
   created_at: string;
+  laz_exists: boolean;
+  copc_exists: boolean;
+  laz_size: number | null;
 }
 
 export interface ConversionProgressPayload {

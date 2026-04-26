@@ -47,3 +47,17 @@ export function readCopcRange(
 ): Promise<ArrayBuffer> {
   return invoke<ArrayBuffer>("read_copc_range", { projectId, offset, len });
 }
+
+/** Permanently delete a project. Pass `deleteCopcFile: true` to also remove
+ *  the on-disk `.copc.laz` artifact. The source LAZ is never touched. */
+export function deleteProject(
+  projectId: string,
+  deleteCopcFile: boolean,
+): Promise<void> {
+  return invoke<void>("delete_project", { projectId, deleteCopcFile });
+}
+
+/** Open the OS file manager and highlight `path`. */
+export function revealInFolder(path: string): Promise<void> {
+  return invoke<void>("reveal_in_folder", { path });
+}

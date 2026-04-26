@@ -6,7 +6,6 @@
  */
 
 export type AppPhase =
-  | "projectList"  // initial screen — browse existing projects
-  | "idle"         // picking a new LAZ file
-  | "converting"   // PDAL subprocess running
-  | "ready";       // project open, point cloud streaming
+  | "launcher"    // full-screen project launcher (browse + create)
+  | "converting"  // PDAL subprocess running
+  | "ready";      // project open, point cloud streaming
