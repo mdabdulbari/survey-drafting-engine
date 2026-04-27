@@ -299,7 +299,7 @@ export function Launcher({ onOpenProject, onProjectCreated }: Props) {
   };
 
   return (
-    <div className="absolute inset-0 bg-slate-950 text-slate-100 flex">
+    <div className="relative h-full w-full bg-slate-950 text-slate-100 flex">
       <Sidebar
         filter={filter}
         onFilterChange={setFilter}

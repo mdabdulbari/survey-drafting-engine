@@ -122,6 +122,49 @@ const INITIAL_CAMERA_POSITION: [number, number, number] = [
   INITIAL_RADIUS,
 ];
 
+// ── ViewCube tween animation ─────────────────────────────────────────────
+// When the user clicks a face / edge / corner, the camera interpolates from
+// its current (yaw, pitch) toward the preset over TWEEN_DURATION_MS using
+// cubic ease-out.  Cancelled the moment the user grabs the canvas with the
+// mouse so manual orbit always wins.
+
+const TWEEN_DURATION_MS = 280;
+
+interface TweenState {
+  startYaw: number;
+  targetYaw: number;
+  startPitch: number;
+  targetPitch: number;
+  startTime: number;
+  duration: number;
+}
+
+/**
+ * Begin a yaw/pitch tween from the current pose to the target.  Unwraps the
+ * target yaw to the angle nearest the current yaw so the lerp follows the
+ * shortest arc instead of spinning the long way around (e.g. 175° → -175°
+ * goes 10° forward, not 350° backward).
+ */
+function startTween(
+  tweenRef: { current: TweenState | null },
+  yawRef: { current: number },
+  pitchRef: { current: number },
+  targetYaw: number,
+  targetPitch: number,
+): void {
+  let target = targetYaw;
+  while (target - yawRef.current > Math.PI) target -= 2 * Math.PI;
+  while (target - yawRef.current < -Math.PI) target += 2 * Math.PI;
+  tweenRef.current = {
+    startYaw: yawRef.current,
+    targetYaw: target,
+    startPitch: pitchRef.current,
+    targetPitch,
+    startTime: performance.now(),
+    duration: TWEEN_DURATION_MS,
+  };
+}
+
 /**
  * Place an orbiting camera at (yaw, pitch, r) around `target` with world-Y up.
  * Writes position, resets up to (0,1,0), points at target, and refreshes the
@@ -162,6 +205,7 @@ interface OrbitRefs {
 
 interface CameraControlsProps extends OrbitRefs {
   fitRef: { current: () => void };
+  tweenRef: { current: TweenState | null };
 }
 
 function CameraControls({
@@ -170,6 +214,7 @@ function CameraControls({
   radiusRef,
   targetRef,
   fitRef,
+  tweenRef,
 }: CameraControlsProps) {
   const { gl, camera, size } = useThree();
   const copc = usePointCloudStore((s) => s.copc);
@@ -194,6 +239,7 @@ function CameraControls({
       cam.zoom = Math.min(size.width, size.height) / (maxSpan * 1.1);
       cam.updateProjectionMatrix();
 
+      tweenRef.current = null; // Fit overrides any in-flight ViewCube tween.
       yawRef.current = INITIAL_YAW;
       pitchRef.current = INITIAL_PITCH;
       targetRef.current.set(0, 0, 0);
@@ -222,6 +268,7 @@ function CameraControls({
 
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 1) return; // middle button only
+      tweenRef.current = null; // user is taking over — cancel any active snap
       mode = e.shiftKey ? "orbit" : "pan";
       lastX = e.clientX;
       lastY = e.clientY;
@@ -309,6 +356,27 @@ function CameraControls({
 
   // ── Apply orbit every frame (priority 0, before EDL) ─────────────────────
   useFrame((state) => {
+    // Advance any active tween before applying orbit, so the camera always
+    // reflects the eased pose for this frame.
+    const tween = tweenRef.current;
+    if (tween) {
+      const t = Math.min(
+        1,
+        (performance.now() - tween.startTime) / tween.duration,
+      );
+      if (t >= 1) {
+        yawRef.current = tween.targetYaw;
+        pitchRef.current = tween.targetPitch;
+        tweenRef.current = null;
+      } else {
+        const k = 1 - Math.pow(1 - t, 3); // cubic ease-out
+        yawRef.current =
+          tween.startYaw + (tween.targetYaw - tween.startYaw) * k;
+        pitchRef.current =
+          tween.startPitch + (tween.targetPitch - tween.startPitch) * k;
+      }
+    }
+
     applyOrbit(
       state.camera,
       targetRef.current,
@@ -423,6 +491,187 @@ const FACE_BASE: React.CSSProperties = {
   overflow: "hidden",
 };
 
+// ── Edge & corner hit zones ──────────────────────────────────────────────
+//
+// 12 edges + 8 corners are placed in cube-local 3D space at the appropriate
+// outward direction:
+//   edge midpoint distance from cube center = H · √2
+//   corner distance                          = H · √3
+// Each is rendered into the cube's preserve-3d container alongside the 6
+// faces and uses CSS rotateX/rotateY/translateZ to land at its location with
+// its plane perpendicular to the outward direction.  Because they sit further
+// out than the faces (which are at H), they naturally render in front of the
+// faces and capture clicks first when the user hovers near a corner/edge.
+//
+// CSS axes: +X right, +Y down (visually below), +Z out of screen.
+//
+//   rotateX(α) sends +Z to (0, -sin α,  cos α)
+//   rotateY(α) sends +Z to (sin α,  0,  cos α)
+//
+// World axes (Y-up, +Z toward the viewer at rest) — the camera (yaw, pitch)
+// for each preset is the orientation that puts the camera looking AT the
+// model from that face/edge/corner.
+
+const EDGE_DIST = CUBE_H * Math.SQRT2;
+const CORNER_DIST = CUBE_H * Math.sqrt(3);
+const ISO_PITCH = Math.atan(Math.SQRT1_2); // ≈ 35.264°, true isometric pitch
+const ISO_DEG = (ISO_PITCH * 180) / Math.PI;
+
+type EdgeAxis = "x" | "y" | "z";
+
+interface EdgePreset {
+  id: string;
+  yaw: number;
+  pitch: number;
+  axis: EdgeAxis;
+  transform: string;
+}
+
+const EDGES: EdgePreset[] = [
+  // X-axis edges — strip's long axis is world X (horizontal)
+  { id: "tf", yaw: 0, pitch: Math.PI / 4, axis: "x",
+    transform: `rotateX(45deg) translateZ(${EDGE_DIST}px)` },
+  { id: "tb", yaw: Math.PI, pitch: Math.PI / 4, axis: "x",
+    transform: `rotateX(135deg) translateZ(${EDGE_DIST}px)` },
+  { id: "Bf", yaw: 0, pitch: -Math.PI / 4, axis: "x",
+    transform: `rotateX(-45deg) translateZ(${EDGE_DIST}px)` },
+  { id: "Bb", yaw: Math.PI, pitch: -Math.PI / 4, axis: "x",
+    transform: `rotateX(-135deg) translateZ(${EDGE_DIST}px)` },
+  // Y-axis edges (vertical, between top and bottom faces)
+  { id: "fr", yaw: Math.PI / 4, pitch: 0, axis: "y",
+    transform: `rotateY(45deg) translateZ(${EDGE_DIST}px)` },
+  { id: "fl", yaw: -Math.PI / 4, pitch: 0, axis: "y",
+    transform: `rotateY(-45deg) translateZ(${EDGE_DIST}px)` },
+  { id: "br", yaw: (3 * Math.PI) / 4, pitch: 0, axis: "y",
+    transform: `rotateY(135deg) translateZ(${EDGE_DIST}px)` },
+  { id: "bl", yaw: (-3 * Math.PI) / 4, pitch: 0, axis: "y",
+    transform: `rotateY(-135deg) translateZ(${EDGE_DIST}px)` },
+  // Z-axis edges (along world Z, between top/bot and right/left faces)
+  { id: "tr", yaw: Math.PI / 2, pitch: Math.PI / 4, axis: "z",
+    transform: `rotateY(90deg) rotateX(45deg) translateZ(${EDGE_DIST}px)` },
+  { id: "tl", yaw: -Math.PI / 2, pitch: Math.PI / 4, axis: "z",
+    transform: `rotateY(-90deg) rotateX(45deg) translateZ(${EDGE_DIST}px)` },
+  { id: "Br", yaw: Math.PI / 2, pitch: -Math.PI / 4, axis: "z",
+    transform: `rotateY(90deg) rotateX(-45deg) translateZ(${EDGE_DIST}px)` },
+  { id: "Bl", yaw: -Math.PI / 2, pitch: -Math.PI / 4, axis: "z",
+    transform: `rotateY(-90deg) rotateX(-45deg) translateZ(${EDGE_DIST}px)` },
+];
+
+interface CornerPreset {
+  id: string;
+  yaw: number;
+  pitch: number;
+  transform: string;
+}
+
+const CORNERS: CornerPreset[] = [
+  // Top corners — pitch = +ISO, αx = +ISO_DEG (CSS sy = -1 = above)
+  { id: "tfr", yaw: Math.PI / 4, pitch: ISO_PITCH,
+    transform: `rotateY(45deg) rotateX(${ISO_DEG}deg) translateZ(${CORNER_DIST}px)` },
+  { id: "tfl", yaw: -Math.PI / 4, pitch: ISO_PITCH,
+    transform: `rotateY(-45deg) rotateX(${ISO_DEG}deg) translateZ(${CORNER_DIST}px)` },
+  { id: "tbr", yaw: (3 * Math.PI) / 4, pitch: ISO_PITCH,
+    transform: `rotateY(135deg) rotateX(${ISO_DEG}deg) translateZ(${CORNER_DIST}px)` },
+  { id: "tbl", yaw: (-3 * Math.PI) / 4, pitch: ISO_PITCH,
+    transform: `rotateY(-135deg) rotateX(${ISO_DEG}deg) translateZ(${CORNER_DIST}px)` },
+  // Bottom corners — pitch = -ISO, αx = -ISO_DEG
+  { id: "bfr", yaw: Math.PI / 4, pitch: -ISO_PITCH,
+    transform: `rotateY(45deg) rotateX(-${ISO_DEG}deg) translateZ(${CORNER_DIST}px)` },
+  { id: "bfl", yaw: -Math.PI / 4, pitch: -ISO_PITCH,
+    transform: `rotateY(-45deg) rotateX(-${ISO_DEG}deg) translateZ(${CORNER_DIST}px)` },
+  { id: "bbr", yaw: (3 * Math.PI) / 4, pitch: -ISO_PITCH,
+    transform: `rotateY(135deg) rotateX(-${ISO_DEG}deg) translateZ(${CORNER_DIST}px)` },
+  { id: "bbl", yaw: (-3 * Math.PI) / 4, pitch: -ISO_PITCH,
+    transform: `rotateY(-135deg) rotateX(-${ISO_DEG}deg) translateZ(${CORNER_DIST}px)` },
+];
+
+const HIT_REST = "rgba(255,255,255,0.04)";
+const HIT_REST_BORDER = "rgba(255,255,255,0.10)";
+const HIT_HOVER = "rgba(120,170,255,0.32)";
+const HIT_HOVER_BORDER = "rgba(140,180,255,0.70)";
+
+interface EdgeHitZoneProps {
+  axis: EdgeAxis;
+  transform: string;
+  onClick: () => void;
+}
+
+function EdgeHitZone({ axis, transform, onClick }: EdgeHitZoneProps) {
+  // X- and Z-axis edges show their long dimension horizontally relative to
+  // the strip's local frame after the rotation chain; Y-axis (vertical) edges
+  // need the long axis along local Y instead.
+  const isVertical = axis === "y";
+  const L = 48;
+  const W = 12;
+  return (
+    <div
+      onClick={onClick}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = HIT_HOVER;
+        e.currentTarget.style.borderColor = HIT_HOVER_BORDER;
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = HIT_REST;
+        e.currentTarget.style.borderColor = HIT_REST_BORDER;
+      }}
+      style={{
+        position: "absolute",
+        top: "50%",
+        left: "50%",
+        width: isVertical ? W : L,
+        height: isVertical ? L : W,
+        marginLeft: isVertical ? -W / 2 : -L / 2,
+        marginTop: isVertical ? -L / 2 : -W / 2,
+        transform,
+        background: HIT_REST,
+        border: `1px solid ${HIT_REST_BORDER}`,
+        borderRadius: 3,
+        cursor: "pointer",
+        boxSizing: "border-box",
+        transition: "background 100ms ease, border-color 100ms ease",
+      }}
+    />
+  );
+}
+
+interface CornerHitZoneProps {
+  transform: string;
+  onClick: () => void;
+}
+
+function CornerHitZone({ transform, onClick }: CornerHitZoneProps) {
+  const S = 16;
+  return (
+    <div
+      onClick={onClick}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.background = HIT_HOVER;
+        e.currentTarget.style.borderColor = HIT_HOVER_BORDER;
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = HIT_REST;
+        e.currentTarget.style.borderColor = HIT_REST_BORDER;
+      }}
+      style={{
+        position: "absolute",
+        top: "50%",
+        left: "50%",
+        width: S,
+        height: S,
+        marginLeft: -S / 2,
+        marginTop: -S / 2,
+        transform,
+        background: HIT_REST,
+        border: `1px solid ${HIT_REST_BORDER}`,
+        borderRadius: 3,
+        cursor: "pointer",
+        boxSizing: "border-box",
+        transition: "background 100ms ease, border-color 100ms ease",
+      }}
+    />
+  );
+}
+
 interface FaceProps {
   label: string;
   gradient: string;
@@ -467,10 +716,11 @@ function Face({ label, gradient, axisColor, transform, onClick }: FaceProps) {
 interface ViewCubeProps {
   yawRef: { current: number };
   pitchRef: { current: number };
+  onSnap: (yaw: number, pitch: number) => void;
   onFit: () => void;
 }
 
-function ViewCube({ yawRef, pitchRef, onFit }: ViewCubeProps) {
+function ViewCube({ yawRef, pitchRef, onSnap, onFit }: ViewCubeProps) {
   const cubeRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number>(0);
 
@@ -488,11 +738,6 @@ function ViewCube({ yawRef, pitchRef, onFit }: ViewCubeProps) {
     rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
   }, [yawRef, pitchRef]);
-
-  const snap = (yaw: number, pitch: number) => {
-    yawRef.current = yaw;
-    pitchRef.current = pitch;
-  };
 
   // Neutral slate palette with brightness scaled by elevation (top brightest,
   // bottom darkest).  Axis identification comes from the colored hairline
@@ -550,43 +795,62 @@ function ViewCube({ yawRef, pitchRef, onFit }: ViewCubeProps) {
             gradient={FACES.front}
             axisColor={AXIS_COLORS.zPos}
             transform={`translateZ(${CUBE_H}px)`}
-            onClick={() => snap(0, 0)}
+            onClick={() => onSnap(0, 0)}
           />
           <Face
             label="Back"
             gradient={FACES.back}
             axisColor={AXIS_COLORS.zNeg}
             transform={`rotateY(180deg) translateZ(${CUBE_H}px)`}
-            onClick={() => snap(Math.PI, 0)}
+            onClick={() => onSnap(Math.PI, 0)}
           />
           <Face
             label="Right"
             gradient={FACES.right}
             axisColor={AXIS_COLORS.xPos}
             transform={`rotateY(90deg) translateZ(${CUBE_H}px)`}
-            onClick={() => snap(Math.PI / 2, 0)}
+            onClick={() => onSnap(Math.PI / 2, 0)}
           />
           <Face
             label="Left"
             gradient={FACES.left}
             axisColor={AXIS_COLORS.xNeg}
             transform={`rotateY(-90deg) translateZ(${CUBE_H}px)`}
-            onClick={() => snap(-Math.PI / 2, 0)}
+            onClick={() => onSnap(-Math.PI / 2, 0)}
           />
           <Face
             label="Top"
             gradient={FACES.top}
             axisColor={AXIS_COLORS.yPos}
             transform={`rotateX(90deg) translateZ(${CUBE_H}px)`}
-            onClick={() => snap(0, PITCH_MAX)}
+            onClick={() => onSnap(0, PITCH_MAX)}
           />
           <Face
             label="Bot"
             gradient={FACES.bottom}
             axisColor={AXIS_COLORS.yNeg}
             transform={`rotateX(-90deg) translateZ(${CUBE_H}px)`}
-            onClick={() => snap(0, PITCH_MIN)}
+            onClick={() => onSnap(0, PITCH_MIN)}
           />
+
+          {/* 12 edge hit zones — 45° tilted views between two adjacent faces. */}
+          {EDGES.map((edge) => (
+            <EdgeHitZone
+              key={`e-${edge.id}`}
+              axis={edge.axis}
+              transform={edge.transform}
+              onClick={() => onSnap(edge.yaw, edge.pitch)}
+            />
+          ))}
+
+          {/* 8 corner hit zones — true ISO views. */}
+          {CORNERS.map((corner) => (
+            <CornerHitZone
+              key={`c-${corner.id}`}
+              transform={corner.transform}
+              onClick={() => onSnap(corner.yaw, corner.pitch)}
+            />
+          ))}
         </div>
       </div>
 
@@ -663,6 +927,13 @@ export function MultiViewport() {
   // Imperative handle CameraControls writes once it knows about size/copc;
   // ViewCube's Fit button calls it.
   const fitRef = useRef<() => void>(() => {});
+  // Active ViewCube tween, advanced by CameraControls' useFrame.  Setting
+  // this object kicks off interpolation; setting it to null cancels it.
+  const tweenRef = useRef<TweenState | null>(null);
+
+  const handleSnap = (yaw: number, pitch: number) => {
+    startTween(tweenRef, yawRef, pitchRef, yaw, pitch);
+  };
 
   return (
     <div
@@ -714,6 +985,7 @@ export function MultiViewport() {
           radiusRef={radiusRef}
           targetRef={targetRef}
           fitRef={fitRef}
+          tweenRef={tweenRef}
         />
         <PointCloud />
         <LodController />
@@ -727,6 +999,7 @@ export function MultiViewport() {
       <ViewCube
         yawRef={yawRef}
         pitchRef={pitchRef}
+        onSnap={handleSnap}
         onFit={() => fitRef.current()}
       />
     </div>

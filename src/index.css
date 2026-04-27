@@ -8,9 +8,18 @@
 
 body {
   overflow: hidden;
+  background: #070a13;
+  color: #e2e8f0;
 }
 
 /* Prevent Three.js OrbitControls from changing the cursor to grab/grabbing */
 canvas {
   cursor: default !important;
+}
+
+/* Frameless titlebar drag-region opt-out — applied to interactive elements
+ * inside the titlebar so clicks register instead of starting a window drag. */
+.no-drag {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
 }

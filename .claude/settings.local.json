@@ -20,7 +20,14 @@
       "Bash(cargo check *)",
       "Bash(rm src/components/FileOpen.tsx src/components/ProjectList.tsx)",
       "Read(//c/c/Users/addub/repos/survey-drafting-engine/src/**)",
-      "Bash(npx vite *)"
+      "Bash(npx vite *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(git add *)"
     ]
-  }
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "github"
+  ]
 }
