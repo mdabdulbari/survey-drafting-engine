@@ -160,41 +160,56 @@ interface OrbitRefs {
   targetRef: { current: THREE.Vector3 };
 }
 
-function CameraControls({ yawRef, pitchRef, radiusRef, targetRef }: OrbitRefs) {
+interface CameraControlsProps extends OrbitRefs {
+  fitRef: { current: () => void };
+}
+
+function CameraControls({
+  yawRef,
+  pitchRef,
+  radiusRef,
+  targetRef,
+  fitRef,
+}: CameraControlsProps) {
   const { gl, camera, size } = useThree();
   const copc = usePointCloudStore((s) => s.copc);
 
   // ── Auto-fit on new file ─────────────────────────────────────────────────
   // Use the largest span of the three axes so the model stays framed at any
   // yaw/pitch.  Slight over-fit (1.1) leaves breathing room at the edges.
+  // Exposed via fitRef so the ViewCube's "Fit" button can re-run it on demand.
   useEffect(() => {
-    if (!copc) return;
+    const fit = () => {
+      if (!copc) return;
 
-    const [minx, miny, minz, maxx, maxy, maxz] = copc.info.cube;
-    const xSpan = maxx - minx;
-    const ySpan = maxy - miny;
-    const zSpan = maxz - minz;
-    const maxSpan = Math.max(xSpan, ySpan, zSpan);
+      const [minx, miny, minz, maxx, maxy, maxz] = copc.info.cube;
+      const xSpan = maxx - minx;
+      const ySpan = maxy - miny;
+      const zSpan = maxz - minz;
+      const maxSpan = Math.max(xSpan, ySpan, zSpan);
 
-    if (maxSpan <= 0 || size.width <= 0 || size.height <= 0) return;
+      if (maxSpan <= 0 || size.width <= 0 || size.height <= 0) return;
 
-    const cam = camera as THREE.OrthographicCamera;
-    cam.zoom = Math.min(size.width, size.height) / (maxSpan * 1.1);
-    cam.updateProjectionMatrix();
+      const cam = camera as THREE.OrthographicCamera;
+      cam.zoom = Math.min(size.width, size.height) / (maxSpan * 1.1);
+      cam.updateProjectionMatrix();
 
-    // Reset orbit to the initial pose.
-    yawRef.current = INITIAL_YAW;
-    pitchRef.current = INITIAL_PITCH;
-    targetRef.current.set(0, 0, 0);
-    radiusRef.current = INITIAL_RADIUS;
+      yawRef.current = INITIAL_YAW;
+      pitchRef.current = INITIAL_PITCH;
+      targetRef.current.set(0, 0, 0);
+      radiusRef.current = INITIAL_RADIUS;
 
-    applyOrbit(
-      cam,
-      targetRef.current,
-      yawRef.current,
-      pitchRef.current,
-      radiusRef.current,
-    );
+      applyOrbit(
+        cam,
+        targetRef.current,
+        yawRef.current,
+        pitchRef.current,
+        radiusRef.current,
+      );
+    };
+
+    fitRef.current = fit;
+    fit();
   }, [copc, camera, size]);
 
   // ── Pointer & wheel handlers ─────────────────────────────────────────────
@@ -354,7 +369,7 @@ function EdlRenderer() {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
-// ViewCube — orientation indicator + preset buttons
+// ViewCube — clickable orientation gizmo
 // ───────────────────────────────────────────────────────────────────────────
 //
 // Classic CSS cube face placements (Y-down CSS space):
@@ -365,24 +380,27 @@ function EdlRenderer() {
 //   Top:     rotateX( 90°)  translateZ(H)       — −Y face in CSS (visually above)
 //   Bottom:  rotateX(-90°)  translateZ(H)       — +Y face in CSS (visually below)
 //
-// To mirror the camera, we rotate the container so the face the camera is
-// looking at ends up at +Z (toward the viewer of the cube):
+// Container transform mirrors the camera so the face the camera is looking at
+// always rotates to +Z (toward the viewer of the cube):
 //
 //   container transform = rotateX(−pitchDeg) rotateY(−yawDeg)
 //
-// The cube is a pure CSS artifact; this mapping does not depend on whether
-// the 3D world is Y-up or Z-up — only on the (yaw, pitch) pair.
-//
-// Sanity checks:
-//   yaw=0,    pitch=0      → identity                 (Front face toward user)
-//   yaw=π/2,  pitch=0      → rotateY(-90°)            (Right face → +Z)
-//   yaw=π,    pitch=0      → rotateY(-180°)           (Back face  → +Z)
-//   yaw=-π/2, pitch=0      → rotateY( 90°)            (Left face  → +Z)
-//   yaw=0,    pitch=+π/2   → rotateX(-90°)            (Top face   → +Z)
-//   yaw=0,    pitch=-π/2   → rotateX( 90°)            (Bottom     → +Z)
+// Each face is the only click target for its preset view — the separate
+// preset-button row was redundant.  Faces carry an axis-color hairline at
+// the bottom (red=X, green=Y, blue=Z; brighter for + axis) so the user can
+// read orientation even when looking at an oblique cube angle.
 
-const CUBE_S = 72; // px — side length of each cube face
+const CUBE_S = 76; // px — side length of each cube face
 const CUBE_H = CUBE_S / 2;
+
+const AXIS_COLORS = {
+  xPos: "#e0584c",
+  xNeg: "#7a3530",
+  yPos: "#5cc278",
+  yNeg: "#33683f",
+  zPos: "#4f8edb",
+  zNeg: "#2c4f78",
+} as const;
 
 const FACE_BASE: React.CSSProperties = {
   position: "absolute",
@@ -395,34 +413,64 @@ const FACE_BASE: React.CSSProperties = {
   justifyContent: "center",
   fontSize: 10,
   fontWeight: 600,
-  letterSpacing: "1px",
+  letterSpacing: "1.2px",
   textTransform: "uppercase",
-  color: "rgba(255,255,255,0.92)",
-  border: "1px solid rgba(255,255,255,0.12)",
+  color: "rgba(230,238,250,0.92)",
+  border: "1px solid rgba(255,255,255,0.08)",
   boxSizing: "border-box",
   cursor: "pointer",
   userSelect: "none",
-  transition: "background 120ms ease, border-color 120ms ease",
-  backdropFilter: "blur(2px)",
+  overflow: "hidden",
 };
 
-type Preset = { label: string; yaw: number; pitch: number };
+interface FaceProps {
+  label: string;
+  gradient: string;
+  axisColor: string;
+  transform: string;
+  onClick: () => void;
+}
 
-const PRESETS: Preset[] = [
-  { label: "Top", yaw: 0, pitch: PITCH_MAX },
-  { label: "Front", yaw: 0, pitch: 0 },
-  { label: "Right", yaw: Math.PI / 2, pitch: 0 },
-  { label: "Bot", yaw: 0, pitch: PITCH_MIN },
-  { label: "Back", yaw: Math.PI, pitch: 0 },
-  { label: "Left", yaw: -Math.PI / 2, pitch: 0 },
-];
+function Face({ label, gradient, axisColor, transform, onClick }: FaceProps) {
+  return (
+    <div
+      style={{ ...FACE_BASE, background: gradient, transform }}
+      onClick={onClick}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.boxShadow =
+          "inset 0 0 0 1px rgba(255,255,255,0.35)";
+        e.currentTarget.style.filter = "brightness(1.15)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.boxShadow = "none";
+        e.currentTarget.style.filter = "none";
+      }}
+    >
+      <span style={{ position: "relative", zIndex: 1 }}>{label}</span>
+      {/* Axis-color hairline along the bottom edge of the face */}
+      <span
+        style={{
+          position: "absolute",
+          left: 6,
+          right: 6,
+          bottom: 4,
+          height: 2,
+          borderRadius: 1,
+          background: axisColor,
+          opacity: 0.85,
+        }}
+      />
+    </div>
+  );
+}
 
 interface ViewCubeProps {
   yawRef: { current: number };
   pitchRef: { current: number };
+  onFit: () => void;
 }
 
-function ViewCube({ yawRef, pitchRef }: ViewCubeProps) {
+function ViewCube({ yawRef, pitchRef, onFit }: ViewCubeProps) {
   const cubeRef = useRef<HTMLDivElement>(null);
   const rafRef = useRef<number>(0);
 
@@ -446,15 +494,16 @@ function ViewCube({ yawRef, pitchRef }: ViewCubeProps) {
     pitchRef.current = pitch;
   };
 
-  // Cube face palette — top is brightest, bottom is darkest, sides paired so
-  // opposing faces feel related but distinguishable.
-  const FACE_COLORS = {
-    top: "linear-gradient(135deg, rgba(96,165,250,0.85), rgba(59,130,246,0.78))",
-    bottom: "linear-gradient(135deg, rgba(30,58,138,0.82), rgba(17,39,103,0.82))",
-    front: "linear-gradient(135deg, rgba(59,130,246,0.78), rgba(37,99,235,0.78))",
-    back: "linear-gradient(135deg, rgba(37,99,235,0.78), rgba(29,78,216,0.82))",
-    right: "linear-gradient(135deg, rgba(45,108,222,0.78), rgba(30,80,180,0.82))",
-    left: "linear-gradient(135deg, rgba(30,80,180,0.82), rgba(20,60,150,0.85))",
+  // Neutral slate palette with brightness scaled by elevation (top brightest,
+  // bottom darkest).  Axis identification comes from the colored hairline
+  // each Face renders along its bottom edge, not from the face fill itself.
+  const FACES = {
+    top: "linear-gradient(160deg, #4d627e 0%, #3a4d66 100%)",
+    bottom: "linear-gradient(160deg, #1d2632 0%, #131922 100%)",
+    front: "linear-gradient(160deg, #3b4f6c 0%, #2d3f57 100%)",
+    back: "linear-gradient(160deg, #2f4159 0%, #233347 100%)",
+    right: "linear-gradient(160deg, #3b4f6c 0%, #2d3f57 100%)",
+    left: "linear-gradient(160deg, #2f4159 0%, #233347 100%)",
   } as const;
 
   return (
@@ -466,24 +515,25 @@ function ViewCube({ yawRef, pitchRef }: ViewCubeProps) {
         zIndex: 100,
         display: "flex",
         flexDirection: "column",
-        alignItems: "center",
-        gap: 10,
-        padding: "12px 12px 10px",
-        borderRadius: 14,
-        background: "rgba(255,255,255,0.04)",
-        border: "1px solid rgba(255,255,255,0.10)",
-        backdropFilter: "blur(12px)",
-        WebkitBackdropFilter: "blur(12px)",
-        boxShadow: "0 8px 32px rgba(0,0,0,0.45)",
+        alignItems: "stretch",
+        gap: 8,
+        padding: 10,
+        borderRadius: 12,
+        background: "rgba(10,14,20,0.55)",
+        border: "1px solid rgba(255,255,255,0.07)",
+        backdropFilter: "blur(14px) saturate(120%)",
+        WebkitBackdropFilter: "blur(14px) saturate(120%)",
+        boxShadow:
+          "0 12px 40px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.04)",
       }}
     >
-      {/* 3D cube — rotates to mirror which face the camera is looking at */}
+      {/* 3D cube — each face is a clickable orientation preset */}
       <div
         style={{
           width: CUBE_S,
           height: CUBE_S,
-          perspective: 280,
-          flexShrink: 0,
+          perspective: 320,
+          alignSelf: "center",
         }}
       >
         <div
@@ -495,132 +545,106 @@ function ViewCube({ yawRef, pitchRef }: ViewCubeProps) {
             transformStyle: "preserve-3d",
           }}
         >
-          {/* Front — CSS +Z face (camera yaw=0, pitch=0) */}
-          <div
-            style={{
-              ...FACE_BASE,
-              background: FACE_COLORS.front,
-              transform: `translateZ(${CUBE_H}px)`,
-            }}
+          <Face
+            label="Front"
+            gradient={FACES.front}
+            axisColor={AXIS_COLORS.zPos}
+            transform={`translateZ(${CUBE_H}px)`}
             onClick={() => snap(0, 0)}
-          >
-            Front
-          </div>
-
-          {/* Back — CSS -Z face (camera yaw=π) */}
-          <div
-            style={{
-              ...FACE_BASE,
-              background: FACE_COLORS.back,
-              transform: `rotateY(180deg) translateZ(${CUBE_H}px)`,
-            }}
+          />
+          <Face
+            label="Back"
+            gradient={FACES.back}
+            axisColor={AXIS_COLORS.zNeg}
+            transform={`rotateY(180deg) translateZ(${CUBE_H}px)`}
             onClick={() => snap(Math.PI, 0)}
-          >
-            Back
-          </div>
-
-          {/* Right — CSS +X face (camera yaw=+π/2) */}
-          <div
-            style={{
-              ...FACE_BASE,
-              background: FACE_COLORS.right,
-              transform: `rotateY(90deg) translateZ(${CUBE_H}px)`,
-            }}
+          />
+          <Face
+            label="Right"
+            gradient={FACES.right}
+            axisColor={AXIS_COLORS.xPos}
+            transform={`rotateY(90deg) translateZ(${CUBE_H}px)`}
             onClick={() => snap(Math.PI / 2, 0)}
-          >
-            Right
-          </div>
-
-          {/* Left — CSS -X face (camera yaw=-π/2) */}
-          <div
-            style={{
-              ...FACE_BASE,
-              background: FACE_COLORS.left,
-              transform: `rotateY(-90deg) translateZ(${CUBE_H}px)`,
-            }}
+          />
+          <Face
+            label="Left"
+            gradient={FACES.left}
+            axisColor={AXIS_COLORS.xNeg}
+            transform={`rotateY(-90deg) translateZ(${CUBE_H}px)`}
             onClick={() => snap(-Math.PI / 2, 0)}
-          >
-            Left
-          </div>
-
-          {/* Top — visually above (camera pitch=+π/2) */}
-          <div
-            style={{
-              ...FACE_BASE,
-              background: FACE_COLORS.top,
-              transform: `rotateX(90deg) translateZ(${CUBE_H}px)`,
-            }}
+          />
+          <Face
+            label="Top"
+            gradient={FACES.top}
+            axisColor={AXIS_COLORS.yPos}
+            transform={`rotateX(90deg) translateZ(${CUBE_H}px)`}
             onClick={() => snap(0, PITCH_MAX)}
-          >
-            Top
-          </div>
-
-          {/* Bottom — visually below (camera pitch=-π/2) */}
-          <div
-            style={{
-              ...FACE_BASE,
-              background: FACE_COLORS.bottom,
-              transform: `rotateX(-90deg) translateZ(${CUBE_H}px)`,
-            }}
+          />
+          <Face
+            label="Bot"
+            gradient={FACES.bottom}
+            axisColor={AXIS_COLORS.yNeg}
+            transform={`rotateX(-90deg) translateZ(${CUBE_H}px)`}
             onClick={() => snap(0, PITCH_MIN)}
-          >
-            Bot
-          </div>
+          />
         </div>
       </div>
 
-      {/* Hairline divider between cube and preset row */}
+      {/* Hairline divider */}
       <div
         style={{
-          width: "100%",
           height: 1,
           background:
-            "linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent)",
+            "linear-gradient(90deg, transparent, rgba(255,255,255,0.10), transparent)",
         }}
       />
 
-      {/* Always-visible preset buttons — all 6 views one click away */}
-      <div
+      {/* Fit-to-view — recenters and re-frames the model. */}
+      <button
+        type="button"
+        onClick={onFit}
+        title="Fit to view (re-frame the model)"
+        onMouseEnter={(e) => {
+          e.currentTarget.style.background = "rgba(255,255,255,0.08)";
+          e.currentTarget.style.color = "rgba(255,255,255,0.95)";
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = "transparent";
+          e.currentTarget.style.color = "rgba(220,230,245,0.72)";
+        }}
         style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(3, 1fr)",
-          gap: 4,
-          width: CUBE_S,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 6,
+          background: "transparent",
+          border: "1px solid rgba(255,255,255,0.10)",
+          color: "rgba(220,230,245,0.72)",
+          fontSize: 10,
+          fontWeight: 600,
+          padding: "5px 8px",
+          cursor: "pointer",
+          borderRadius: 6,
+          letterSpacing: "0.8px",
+          textTransform: "uppercase",
+          transition: "background 120ms ease, color 120ms ease",
         }}
       >
-        {PRESETS.map(({ label, yaw, pitch }) => (
-          <button
-            key={label}
-            onClick={() => snap(yaw, pitch)}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = "rgba(255,255,255,0.10)";
-              e.currentTarget.style.borderColor = "rgba(255,255,255,0.22)";
-              e.currentTarget.style.color = "rgba(255,255,255,0.95)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = "rgba(255,255,255,0.04)";
-              e.currentTarget.style.borderColor = "rgba(255,255,255,0.10)";
-              e.currentTarget.style.color = "rgba(255,255,255,0.7)";
-            }}
-            style={{
-              background: "rgba(255,255,255,0.04)",
-              border: "1px solid rgba(255,255,255,0.10)",
-              color: "rgba(255,255,255,0.7)",
-              fontSize: 9,
-              fontWeight: 600,
-              padding: "4px 2px",
-              cursor: "pointer",
-              borderRadius: 5,
-              letterSpacing: "0.6px",
-              textTransform: "uppercase",
-              transition:
-                "background 120ms ease, border-color 120ms ease, color 120ms ease",
-            }}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+        <svg
+          viewBox="0 0 16 16"
+          width="11"
+          height="11"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M2 5V2h3M14 5V2h-3M2 11v3h3M14 11v3h-3" />
+          <circle cx="8" cy="8" r="1.6" />
+        </svg>
+        Fit
+      </button>
     </div>
   );
 }
@@ -636,6 +660,9 @@ export function MultiViewport() {
   const pitchRef = useRef(INITIAL_PITCH);
   const radiusRef = useRef(INITIAL_RADIUS);
   const targetRef = useRef(new THREE.Vector3(0, 0, 0));
+  // Imperative handle CameraControls writes once it knows about size/copc;
+  // ViewCube's Fit button calls it.
+  const fitRef = useRef<() => void>(() => {});
 
   return (
     <div
@@ -686,6 +713,7 @@ export function MultiViewport() {
           pitchRef={pitchRef}
           radiusRef={radiusRef}
           targetRef={targetRef}
+          fitRef={fitRef}
         />
         <PointCloud />
         <LodController />
@@ -696,7 +724,11 @@ export function MultiViewport() {
       </Canvas>
 
       {/* HTML overlay — sits outside the Canvas so it's always on top */}
-      <ViewCube yawRef={yawRef} pitchRef={pitchRef} />
+      <ViewCube
+        yawRef={yawRef}
+        pitchRef={pitchRef}
+        onFit={() => fitRef.current()}
+      />
     </div>
   );
 }
