@@ -4,6 +4,7 @@ import {
   deriveStatus,
   statusDotClass,
   statusTextClass,
+  type ProjectStatus,
 } from "./projectStatus";
 import {
   absoluteTime,
@@ -16,6 +17,7 @@ import {
 interface Props {
   project: ProjectMeta;
   selected: boolean;
+  isConverting?: boolean;
   onSelect: () => void;
   onOpen: () => void;
   onReveal: () => void;
@@ -24,10 +26,13 @@ interface Props {
 }
 
 export const ProjectRow = forwardRef<HTMLDivElement, Props>(function ProjectRow(
-  { project, selected, onSelect, onOpen, onReveal, onDelete, onContextMenu },
+  { project, selected, isConverting = false, onSelect, onOpen, onReveal, onDelete, onContextMenu },
   ref,
 ) {
-  const status = deriveStatus(project);
+  const effectiveStatus: ProjectStatus = isConverting
+    ? { kind: "converting", label: "Converting…" }
+    : deriveStatus(project);
+  const status = effectiveStatus;
   const dir = parentDir(project.laz_path);
 
   function handleKey(e: KeyboardEvent<HTMLDivElement>) {
@@ -62,8 +67,16 @@ export const ProjectRow = forwardRef<HTMLDivElement, Props>(function ProjectRow(
           : "bg-white/[0.02] border-white/5 hover:bg-white/[0.05] hover:border-white/10",
       ].join(" ")}
     >
-      <div className="flex-shrink-0 w-9 h-9 rounded-md bg-gradient-to-br from-slate-700 to-slate-800 border border-white/10 flex items-center justify-center text-[10px] uppercase tracking-wider text-slate-300 font-semibold">
-        LAZ
+      <div className={[
+        "flex-shrink-0 w-9 h-9 rounded-md border flex items-center justify-center",
+        "text-[10px] uppercase tracking-wider font-semibold",
+        isConverting
+          ? "bg-sky-500/15 border-sky-500/30 text-sky-300"
+          : "bg-gradient-to-br from-slate-700 to-slate-800 border-white/10 text-slate-300",
+      ].join(" ")}>
+        {isConverting ? (
+          <span className="w-2.5 h-2.5 rounded-full bg-sky-400 animate-pulse" />
+        ) : "LAZ"}
       </div>
 
       <div className="min-w-0 flex-1">

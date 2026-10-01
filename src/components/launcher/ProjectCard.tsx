@@ -1,16 +1,18 @@
-import { forwardRef, type KeyboardEvent, type MouseEvent } from "react";
+import { forwardRef, useMemo, type KeyboardEvent, type MouseEvent } from "react";
 import type { ProjectMeta } from "../../ipc/types";
 import {
   deriveStatus,
   statusDotClass,
   statusTextClass,
+  type ProjectStatus,
 } from "./projectStatus";
-import { absoluteTime, formatBytes, relativeTime } from "./format";
-import { thumbStyle } from "./thumbnail";
+import { absoluteTime, formatBytes, parentDir, relativeTime } from "./format";
+import { thumbPoints } from "./thumbnail";
 
 interface Props {
   project: ProjectMeta;
   selected: boolean;
+  isConverting?: boolean;
   onSelect: () => void;
   onOpen: () => void;
   onReveal: () => void;
@@ -18,12 +20,32 @@ interface Props {
   onContextMenu: (e: MouseEvent<HTMLDivElement>) => void;
 }
 
+const STRIPE_COLOR: Record<ProjectStatus["kind"], string> = {
+  ready:              "rgba(52,211,153,0.65)",
+  "needs-conversion": "rgba(251,191,36,0.75)",
+  converting:         "rgba(56,189,248,0.75)",
+  missing:            "rgba(248,113,113,0.75)",
+  broken:             "rgba(248,113,113,0.75)",
+};
+
+function folderLabel(path: string): string {
+  const dir = parentDir(path);
+  if (dir === path) return "";
+  const i = Math.max(dir.lastIndexOf("/"), dir.lastIndexOf("\\"));
+  return i === -1 ? dir : dir.slice(i + 1);
+}
+
 export const ProjectCard = forwardRef<HTMLDivElement, Props>(function ProjectCard(
-  { project, selected, onSelect, onOpen, onReveal, onDelete, onContextMenu },
+  { project, selected, isConverting = false, onSelect, onOpen, onReveal, onDelete, onContextMenu },
   ref,
 ) {
-  const status = deriveStatus(project);
-  const thumb = thumbStyle(project.id);
+  const effectiveStatus: ProjectStatus = isConverting
+    ? { kind: "converting", label: "Converting…" }
+    : deriveStatus(project);
+
+  const points = useMemo(() => thumbPoints(project.id), [project.id]);
+  const folder = folderLabel(project.laz_path);
+  const stripeColor = STRIPE_COLOR[effectiveStatus.kind];
 
   function handleKey(e: KeyboardEvent<HTMLDivElement>) {
     if (e.key === "Enter") {
@@ -49,69 +71,78 @@ export const ProjectCard = forwardRef<HTMLDivElement, Props>(function ProjectCar
       onDoubleClick={onOpen}
       onKeyDown={handleKey}
       onContextMenu={onContextMenu}
+      style={{ borderLeftWidth: 3, borderLeftColor: stripeColor }}
       className={[
         "group relative flex flex-col rounded-xl overflow-hidden cursor-pointer",
-        "bg-slate-900/40 border transition-all",
-        selected
-          ? "border-blue-500/60 ring-2 ring-blue-500/40"
-          : "border-white/5 hover:border-white/15",
+        "bg-slate-900/40 border border-white/[0.07] transition-all duration-150",
+        "shadow-[0_2px_8px_-4px_rgba(0,0,0,0.5)]",
+        "hover:-translate-y-px hover:shadow-[0_10px_28px_-8px_rgba(0,0,0,0.55)] hover:border-white/15",
+        selected ? "ring-2 ring-blue-500/40 border-blue-500/40" : "",
       ].join(" ")}
     >
       {/* Thumbnail */}
       <div
-        className="relative h-36 w-full"
-        style={{ background: thumb.background }}
+        className="relative h-36 w-full overflow-hidden"
+        style={{ background: 'radial-gradient(ellipse at 45% 42%, #0e1d33 0%, #070d1a 100%)' }}
       >
-        {/* Centered point-cloud glyph */}
+        {/* Procedural point-cloud minimap */}
         <svg
-          viewBox="0 0 64 64"
-          className="absolute inset-0 m-auto w-16 h-16 text-white/35"
-          fill="currentColor"
+          viewBox="0 0 100 100"
+          className="absolute inset-0 w-full h-full"
+          preserveAspectRatio="none"
           aria-hidden
         >
-          <circle cx="14" cy="20" r="2" />
-          <circle cx="22" cy="14" r="2" />
-          <circle cx="32" cy="18" r="2.4" />
-          <circle cx="42" cy="14" r="2" />
-          <circle cx="50" cy="22" r="2" />
-          <circle cx="18" cy="30" r="2.2" />
-          <circle cx="28" cy="28" r="2.6" />
-          <circle cx="38" cy="30" r="2.2" />
-          <circle cx="48" cy="34" r="2" />
-          <circle cx="14" cy="40" r="2" />
-          <circle cx="24" cy="42" r="2.4" />
-          <circle cx="34" cy="40" r="2.2" />
-          <circle cx="44" cy="44" r="2.4" />
-          <circle cx="20" cy="50" r="2" />
-          <circle cx="32" cy="52" r="2.2" />
-          <circle cx="46" cy="52" r="2" />
+          {points.map((pt, i) => (
+            <circle
+              // biome-ignore lint/suspicious/noArrayIndexKey: stable ordered list
+              key={i}
+              cx={pt.x * 100}
+              cy={pt.y * 100}
+              r={pt.r}
+              fill="white"
+              fillOpacity={[0.50, 0.18, 0.60, 0.22, 0.42, 0.13, 0.55, 0.28, 0.45, 0.15][i % 10]}
+            />
+          ))}
         </svg>
 
+        {/* Permanent bottom vignette into meta strip */}
+        <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-black/60 to-transparent pointer-events-none" aria-hidden />
+
+        {/* Converting shimmer */}
+        {isConverting && (
+          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-sky-500/10 to-transparent animate-pulse" />
+        )}
+
         {/* Status pill */}
-        <div className="absolute top-2 right-2">
+        <div className="absolute top-2 right-2 z-10">
           <span
             className={[
               "inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full",
               "text-[10px] font-medium",
-              "bg-black/55 backdrop-blur-sm border border-white/10",
-              statusTextClass(status),
+              "bg-black/60 backdrop-blur-sm border border-white/10",
+              statusTextClass(effectiveStatus),
             ].join(" ")}
             title={
-              status.kind === "missing"
+              effectiveStatus.kind === "missing"
                 ? `Source LAZ not found at ${project.laz_path}`
-                : status.kind === "broken"
+                : effectiveStatus.kind === "broken"
                   ? `COPC artifact missing at ${project.copc_path}`
-                  : status.label
+                  : effectiveStatus.label
             }
           >
-            <span className={`w-1.5 h-1.5 rounded-full ${statusDotClass(status)}`} />
-            {status.label}
+            <span
+              className={[
+                "w-1.5 h-1.5 rounded-full",
+                isConverting ? "bg-sky-400 animate-pulse" : statusDotClass(effectiveStatus),
+              ].join(" ")}
+            />
+            {effectiveStatus.label}
           </span>
         </div>
 
         {/* Hover action bar */}
-        <div className="absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity" />
-        <div className="absolute bottom-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+        <div className="absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-black/70 to-transparent opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity" />
+        <div className="absolute bottom-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity z-10">
           <CardIconButton title="Open" onClick={stop(onOpen)} variant="primary">
             <svg viewBox="0 0 16 16" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2">
               <path d="M3 8h10M9 4l4 4-4 4" strokeLinecap="round" strokeLinejoin="round" />
@@ -131,10 +162,18 @@ export const ProjectCard = forwardRef<HTMLDivElement, Props>(function ProjectCar
       </div>
 
       {/* Meta strip */}
-      <div className="px-3 py-2.5 border-t border-white/5 bg-slate-950/40">
+      <div className="px-3 py-2.5 border-t border-white/[0.07] bg-slate-950/50">
         <div className="text-[13px] font-medium text-white truncate" title={project.name}>
           {project.name}
         </div>
+        {folder && (
+          <div
+            className="mt-0.5 text-[10.5px] text-slate-500 truncate"
+            title={project.laz_path}
+          >
+            {folder}
+          </div>
+        )}
         <div className="mt-1 text-[11px] text-slate-400 flex items-center gap-1.5">
           <span>{formatBytes(project.laz_size)}</span>
           <span className="text-slate-600">·</span>

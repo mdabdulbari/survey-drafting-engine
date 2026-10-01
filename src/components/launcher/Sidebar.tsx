@@ -20,7 +20,7 @@ export function Sidebar({ filter, onFilterChange, counts, onProjectCreated }: Pr
     { key: "all",              label: "All projects",     count: counts.all,             dot: "bg-slate-400" },
     { key: "ready",            label: "Ready",            count: counts.ready,           dot: "bg-emerald-400" },
     { key: "needs-conversion", label: "Needs conversion", count: counts.needsConversion, dot: "bg-amber-400" },
-    { key: "issues",           label: "Issues",           count: counts.issues,          dot: "bg-red-400" },
+    { key: "issues",           label: "Issues",           count: counts.issues,          dot: counts.issues > 0 ? "bg-red-400" : "bg-slate-600" },
   ];
 
   return (
@@ -39,7 +39,6 @@ export function Sidebar({ filter, onFilterChange, counts, onProjectCreated }: Pr
             <div className="text-white font-semibold tracking-tight text-sm truncate">
               Survey Drafting Engine
             </div>
-            <div className="text-[10px] text-slate-500">v0.1.0</div>
           </div>
         </div>
       </div>
@@ -63,16 +62,13 @@ export function Sidebar({ filter, onFilterChange, counts, onProjectCreated }: Pr
                   type="button"
                   onClick={() => onFilterChange(item.key)}
                   className={[
-                    "w-full flex items-center justify-between gap-2 px-3 py-1.5 rounded-md text-sm",
-                    "transition-colors relative",
+                    "w-full flex items-center justify-between gap-2 px-3 py-1.5 text-sm",
+                    "transition-colors border-l-2",
                     active
-                      ? "bg-blue-500/10 text-white"
-                      : "text-slate-300 hover:bg-white/[0.04] hover:text-white",
+                      ? "bg-white/[0.07] text-white border-l-blue-400 rounded-r-md"
+                      : "text-slate-400 hover:bg-white/[0.04] hover:text-slate-200 border-l-transparent rounded-md",
                   ].join(" ")}
                 >
-                  {active && (
-                    <span className="absolute left-0 top-1/2 -translate-y-1/2 h-4 w-0.5 rounded-r bg-blue-400" />
-                  )}
                   <span className="flex items-center gap-2 min-w-0">
                     <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${item.dot}`} />
                     <span className="truncate">{item.label}</span>
@@ -88,7 +84,7 @@ export function Sidebar({ filter, onFilterChange, counts, onProjectCreated }: Pr
       </nav>
 
       {/* Footer */}
-      <div className="mt-auto px-6 pb-6 text-[11px] text-slate-500 leading-relaxed">
+      <div className="mt-auto px-6 py-4 text-[11px] text-slate-500 leading-relaxed border-t border-white/[0.05]">
         <p>
           <kbd className="px-1.5 py-0.5 rounded bg-white/5 border border-white/10 text-slate-300">↑ ↓</kbd>{" "}
           navigate ·{" "}

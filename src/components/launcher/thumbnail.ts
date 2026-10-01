@@ -1,11 +1,4 @@
-/**
- * Procedural per-project thumbnail. Hashes the project id to a stable hue,
- * builds a CSS gradient + dot-grid background. Survives reloads — same id
- * produces the same colors.
- */
-
 function hashString(s: string): number {
-  // FNV-1a 32-bit
   let h = 0x811c9dc5;
   for (let i = 0; i < s.length; i++) {
     h ^= s.charCodeAt(i);
@@ -14,20 +7,41 @@ function hashString(s: string): number {
   return h >>> 0;
 }
 
-export interface ThumbStyle {
-  hue: number;
-  background: string;
+export interface ThumbPoint {
+  x: number;
+  y: number;
+  r: number;
 }
 
-export function thumbStyle(projectId: string): ThumbStyle {
-  const h = hashString(projectId);
-  const hue = h % 360;
-  const c1 = `hsl(${hue} 55% 18%)`;
-  const c2 = `hsl(${(hue + 28) % 360} 55% 32%)`;
-  const dotColor = `hsl(${hue} 60% 75% / 0.18)`;
-  // Layered: dot grid on top, gradient on the bottom.
-  const background =
-    `radial-gradient(circle, ${dotColor} 1px, transparent 1.4px) 0 0 / 14px 14px,` +
-    ` linear-gradient(135deg, ${c1}, ${c2})`;
-  return { hue, background };
+/**
+ * Generates a deterministic scatter of points for a project's thumbnail minimap.
+ * Same project ID always produces the same layout.
+ */
+export function thumbPoints(projectId: string): ThumbPoint[] {
+  let seed = hashString(projectId);
+  function next(): number {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return (seed >>> 0) / 0x100000000;
+  }
+
+  const numClusters = 2 + Math.floor(next() * 3);
+  const clusters: [number, number][] = [];
+  for (let i = 0; i < numClusters; i++) {
+    clusters.push([0.12 + next() * 0.76, 0.18 + next() * 0.64]);
+  }
+
+  const points: ThumbPoint[] = [];
+  const count = 40 + Math.floor(next() * 28);
+  for (let i = 0; i < count; i++) {
+    const [cx, cy] = clusters[Math.floor(next() * clusters.length)];
+    const angle = next() * Math.PI * 2;
+    const spread = 0.10 + next() * 0.11;
+    const dist = Math.sqrt(next()) * spread;
+    const x = cx + Math.cos(angle) * dist;
+    const y = cy + Math.sin(angle) * dist;
+    if (x >= 0.02 && x <= 0.98 && y >= 0.02 && y <= 0.98) {
+      points.push({ x, y, r: 1.2 + next() * 1.9 });
+    }
+  }
+  return points;
 }

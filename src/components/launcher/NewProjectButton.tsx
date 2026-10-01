@@ -42,9 +42,10 @@ export function NewProjectButton({ onProjectCreated }: Props) {
         onClick={handleClick}
         disabled={busy}
         className={[
-          "w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg",
-          "bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed",
-          "text-white text-sm font-medium shadow-[0_1px_0_0_rgba(255,255,255,0.1)_inset,0_2px_8px_-2px_rgba(0,0,0,0.4)]",
+          "w-full flex items-center justify-center gap-2 px-4 py-2 rounded-lg",
+          "bg-transparent border border-white/[0.13] hover:border-white/25 hover:bg-white/[0.04]",
+          "disabled:opacity-40 disabled:cursor-not-allowed",
+          "text-slate-400 hover:text-slate-200 text-sm font-medium",
           "transition-colors",
         ].join(" ")}
       >

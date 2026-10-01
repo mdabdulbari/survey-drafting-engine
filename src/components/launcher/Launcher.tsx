@@ -12,6 +12,8 @@ import {
   createProject,
   deleteProject,
   listProjects,
+  onConversionDone,
+  onConversionError,
   revealInFolder,
   startConversion,
 } from "../../ipc";
@@ -74,6 +76,7 @@ export function Launcher({ onOpenProject, onProjectCreated }: Props) {
   } | null>(null);
   const [pendingDelete, setPendingDelete] = useState<ProjectMeta | null>(null);
   const [cols, setCols] = useState(1);
+  const [convertingIds, setConvertingIds] = useState<Set<string>>(new Set());
 
   const searchRef = useRef<HTMLInputElement>(null);
   const cardRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -93,6 +96,34 @@ export function Launcher({ onOpenProject, onProjectCreated }: Props) {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Track batch conversions: remove from set and refresh when each completes or errors.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    onConversionDone((payload) => {
+      setConvertingIds((prev) => {
+        if (!prev.has(payload.project_id)) return prev;
+        const next = new Set(prev);
+        next.delete(payload.project_id);
+        return next;
+      });
+      refresh();
+    }).then((u) => { unlisten = u; });
+    return () => { unlisten?.(); };
+  }, [refresh]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    onConversionError((payload) => {
+      setConvertingIds((prev) => {
+        if (!prev.has(payload.project_id)) return prev;
+        const next = new Set(prev);
+        next.delete(payload.project_id);
+        return next;
+      });
+    }).then((u) => { unlisten = u; });
+    return () => { unlisten?.(); };
+  }, []);
 
   // ── Drag-drop (window-wide) ─────────────────────────────────────────────────
   const handleDrop = useCallback(
@@ -150,6 +181,24 @@ export function Launcher({ onOpenProject, onProjectCreated }: Props) {
     }
     return sorted;
   }, [projects, query, sort, filter]);
+
+  const handleBatchConvert = useCallback(() => {
+    const toConvert = visible.filter(
+      (p) => deriveStatus(p).kind === "needs-conversion" && !convertingIds.has(p.id),
+    );
+    if (toConvert.length === 0) return;
+    setConvertingIds((prev) => new Set([...prev, ...toConvert.map((p) => p.id)]));
+    for (const p of toConvert) {
+      startConversion(p.id).catch((err) => {
+        console.error(`Conversion failed for ${p.id}:`, err);
+        setConvertingIds((prev) => {
+          const next = new Set(prev);
+          next.delete(p.id);
+          return next;
+        });
+      });
+    }
+  }, [visible, convertingIds]);
 
   // Keep selection in-bounds when filter/sort/search changes.
   useEffect(() => {
@@ -286,12 +335,19 @@ export function Launcher({ onOpenProject, onProjectCreated }: Props) {
     ];
   };
 
+  const batchConvertCount =
+    filter === "needs-conversion"
+      ? visible.filter((p) => deriveStatus(p).kind === "needs-conversion" && !convertingIds.has(p.id)).length
+      : 0;
+
   const headerSubtitle =
     projects === null
       ? "Loading…"
       : visible.length === 0 && projects.length > 0
         ? "No matches"
-        : `${visible.length} of ${projects.length}`;
+        : filter === "all"
+          ? `${projects.length} ${projects.length === 1 ? "project" : "projects"}`
+          : `${visible.length} of ${projects.length}`;
 
   const setRef = (id: string) => (el: HTMLDivElement | null) => {
     if (el) cardRefs.current.set(id, el);
@@ -316,6 +372,19 @@ export function Launcher({ onOpenProject, onProjectCreated }: Props) {
             <p className="text-sm text-slate-400 mt-1">{headerSubtitle}</p>
           </div>
           <div className="flex items-center gap-2">
+            {batchConvertCount > 0 && (
+              <button
+                type="button"
+                onClick={handleBatchConvert}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/25 transition-colors"
+              >
+                <svg viewBox="0 0 16 16" className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="1.75">
+                  <path d="M2 8h9M8 5l3 3-3 3" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M13 3v10" strokeLinecap="round" />
+                </svg>
+                Convert all ({batchConvertCount})
+              </button>
+            )}
             <SearchBox ref={searchRef} value={query} onChange={setQuery} />
             <SortSelect value={sort} onChange={setSort} />
             <ViewToggle value={view} onChange={setView} />
@@ -370,6 +439,7 @@ export function Launcher({ onOpenProject, onProjectCreated }: Props) {
                   ref={setRef(p.id)}
                   project={p}
                   selected={p.id === selectedId}
+                  isConverting={convertingIds.has(p.id)}
                   onSelect={() => setSelectedId(p.id)}
                   onOpen={() => onOpenProject(p)}
                   onReveal={() =>
@@ -390,6 +460,7 @@ export function Launcher({ onOpenProject, onProjectCreated }: Props) {
                   ref={setRef(p.id)}
                   project={p}
                   selected={p.id === selectedId}
+                  isConverting={convertingIds.has(p.id)}
                   onSelect={() => setSelectedId(p.id)}
                   onOpen={() => onOpenProject(p)}
                   onReveal={() =>
