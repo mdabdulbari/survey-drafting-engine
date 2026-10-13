@@ -58,7 +58,7 @@
  *   Shift + middle drag      → grab-style orbit:
  *                               horizontal dx  →  yaw   -= dx · speed
  *                               vertical   dy  →  pitch += dy · speed
- *   Scroll wheel             → zoom (orthographic camera.zoom only)
+ *   Scroll wheel             → zoom toward cursor (camera.zoom + target shift)
  *
  *   Drag-right decreases yaw → camera orbits around +Y from +Z toward -X,
  *   so the object visually rotates right with the cursor.  Drag-down
@@ -337,8 +337,26 @@ function CameraControls({
       e.preventDefault();
       const cam = camera as THREE.OrthographicCamera;
       const factor = e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
-      cam.zoom = Math.max(1e-6, cam.zoom * factor);
+      const oldZoom = cam.zoom;
+      const newZoom = Math.max(1e-6, oldZoom * factor);
+
+      // Zoom toward cursor: the world point under the cursor sits at
+      // centre + (px·right − py·up) / zoom.  Shifting the view centre by
+      // (1/oldZoom − 1/newZoom) times that pixel offset keeps it fixed.
+      const rect = canvas.getBoundingClientRect();
+      const px = e.clientX - rect.left - rect.width / 2;
+      const py = e.clientY - rect.top - rect.height / 2;
+      const k = 1 / oldZoom - 1 / newZoom;
+
+      const right = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 0);
+      const up = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 1);
+      const delta = right.multiplyScalar(px * k).addScaledVector(up, -py * k);
+
+      targetRef.current.add(delta);
+      cam.position.add(delta);
+      cam.zoom = newZoom;
       cam.updateProjectionMatrix();
+      cam.updateMatrixWorld();
     };
 
     canvas.addEventListener("pointerdown", onPointerDown);
