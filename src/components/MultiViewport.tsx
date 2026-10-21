@@ -58,7 +58,7 @@
  *   Shift + middle drag      → grab-style orbit:
  *                               horizontal dx  →  yaw   -= dx · speed
  *                               vertical   dy  →  pitch += dy · speed
- *   Scroll wheel             → zoom (orthographic camera.zoom only)
+ *   Scroll wheel             → zoom toward cursor (camera.zoom + target shift)
  *
  *   Drag-right decreases yaw → camera orbits around +Y from +Z toward -X,
  *   so the object visually rotates right with the cursor.  Drag-down
@@ -265,6 +265,8 @@ function CameraControls({
     let lastX = 0,
       lastY = 0;
     let capturedId = -1;
+    const _right = new THREE.Vector3();
+    const _up = new THREE.Vector3();
 
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 1) return; // middle button only
@@ -302,17 +304,14 @@ function CameraControls({
         const cam = camera as THREE.OrthographicCamera;
         const scale = 1 / cam.zoom;
 
-        const right = new THREE.Vector3().setFromMatrixColumn(
-          cam.matrixWorld,
-          0,
-        );
-        const up = new THREE.Vector3().setFromMatrixColumn(cam.matrixWorld, 1);
+        _right.setFromMatrixColumn(cam.matrixWorld, 0);
+        _up.setFromMatrixColumn(cam.matrixWorld, 1);
 
         // drag right (+dx) → camera moves left  → scene appears to follow right
         // drag down  (+dy) → camera moves up    → scene appears to follow down
-        const delta = right
+        const delta = _right
           .multiplyScalar(-dx * scale)
-          .addScaledVector(up, dy * scale);
+          .addScaledVector(_up, dy * scale);
 
         targetRef.current.add(delta);
         cam.position.add(delta);
@@ -337,8 +336,26 @@ function CameraControls({
       e.preventDefault();
       const cam = camera as THREE.OrthographicCamera;
       const factor = e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
-      cam.zoom = Math.max(1e-6, cam.zoom * factor);
+      const oldZoom = cam.zoom;
+      const newZoom = Math.max(1e-6, oldZoom * factor);
+
+      // Zoom toward cursor: the world point under the cursor sits at
+      // centre + (px·right − py·up) / zoom.  Shifting the view centre by
+      // (1/oldZoom − 1/newZoom) times that pixel offset keeps it fixed.
+      const rect = canvas.getBoundingClientRect();
+      const px = e.clientX - rect.left - rect.width / 2;
+      const py = e.clientY - rect.top - rect.height / 2;
+      const k = 1 / oldZoom - 1 / newZoom;
+
+      _right.setFromMatrixColumn(cam.matrixWorld, 0);
+      _up.setFromMatrixColumn(cam.matrixWorld, 1);
+      const delta = _right.multiplyScalar(px * k).addScaledVector(_up, -py * k);
+
+      targetRef.current.add(delta);
+      cam.position.add(delta);
+      cam.zoom = newZoom;
       cam.updateProjectionMatrix();
+      cam.updateMatrixWorld();
     };
 
     canvas.addEventListener("pointerdown", onPointerDown);
@@ -529,32 +546,92 @@ interface EdgePreset {
 
 const EDGES: EdgePreset[] = [
   // X-axis edges — strip's long axis is world X (horizontal)
-  { id: "tf", yaw: 0, pitch: Math.PI / 4, axis: "x",
-    transform: `rotateX(45deg) translateZ(${EDGE_DIST}px)` },
-  { id: "tb", yaw: Math.PI, pitch: Math.PI / 4, axis: "x",
-    transform: `rotateX(135deg) translateZ(${EDGE_DIST}px)` },
-  { id: "Bf", yaw: 0, pitch: -Math.PI / 4, axis: "x",
-    transform: `rotateX(-45deg) translateZ(${EDGE_DIST}px)` },
-  { id: "Bb", yaw: Math.PI, pitch: -Math.PI / 4, axis: "x",
-    transform: `rotateX(-135deg) translateZ(${EDGE_DIST}px)` },
+  {
+    id: "tf",
+    yaw: 0,
+    pitch: Math.PI / 4,
+    axis: "x",
+    transform: `rotateX(45deg) translateZ(${EDGE_DIST}px)`,
+  },
+  {
+    id: "tb",
+    yaw: Math.PI,
+    pitch: Math.PI / 4,
+    axis: "x",
+    transform: `rotateX(135deg) translateZ(${EDGE_DIST}px)`,
+  },
+  {
+    id: "Bf",
+    yaw: 0,
+    pitch: -Math.PI / 4,
+    axis: "x",
+    transform: `rotateX(-45deg) translateZ(${EDGE_DIST}px)`,
+  },
+  {
+    id: "Bb",
+    yaw: Math.PI,
+    pitch: -Math.PI / 4,
+    axis: "x",
+    transform: `rotateX(-135deg) translateZ(${EDGE_DIST}px)`,
+  },
   // Y-axis edges (vertical, between top and bottom faces)
-  { id: "fr", yaw: Math.PI / 4, pitch: 0, axis: "y",
-    transform: `rotateY(45deg) translateZ(${EDGE_DIST}px)` },
-  { id: "fl", yaw: -Math.PI / 4, pitch: 0, axis: "y",
-    transform: `rotateY(-45deg) translateZ(${EDGE_DIST}px)` },
-  { id: "br", yaw: (3 * Math.PI) / 4, pitch: 0, axis: "y",
-    transform: `rotateY(135deg) translateZ(${EDGE_DIST}px)` },
-  { id: "bl", yaw: (-3 * Math.PI) / 4, pitch: 0, axis: "y",
-    transform: `rotateY(-135deg) translateZ(${EDGE_DIST}px)` },
+  {
+    id: "fr",
+    yaw: Math.PI / 4,
+    pitch: 0,
+    axis: "y",
+    transform: `rotateY(45deg) translateZ(${EDGE_DIST}px)`,
+  },
+  {
+    id: "fl",
+    yaw: -Math.PI / 4,
+    pitch: 0,
+    axis: "y",
+    transform: `rotateY(-45deg) translateZ(${EDGE_DIST}px)`,
+  },
+  {
+    id: "br",
+    yaw: (3 * Math.PI) / 4,
+    pitch: 0,
+    axis: "y",
+    transform: `rotateY(135deg) translateZ(${EDGE_DIST}px)`,
+  },
+  {
+    id: "bl",
+    yaw: (-3 * Math.PI) / 4,
+    pitch: 0,
+    axis: "y",
+    transform: `rotateY(-135deg) translateZ(${EDGE_DIST}px)`,
+  },
   // Z-axis edges (along world Z, between top/bot and right/left faces)
-  { id: "tr", yaw: Math.PI / 2, pitch: Math.PI / 4, axis: "z",
-    transform: `rotateY(90deg) rotateX(45deg) translateZ(${EDGE_DIST}px)` },
-  { id: "tl", yaw: -Math.PI / 2, pitch: Math.PI / 4, axis: "z",
-    transform: `rotateY(-90deg) rotateX(45deg) translateZ(${EDGE_DIST}px)` },
-  { id: "Br", yaw: Math.PI / 2, pitch: -Math.PI / 4, axis: "z",
-    transform: `rotateY(90deg) rotateX(-45deg) translateZ(${EDGE_DIST}px)` },
-  { id: "Bl", yaw: -Math.PI / 2, pitch: -Math.PI / 4, axis: "z",
-    transform: `rotateY(-90deg) rotateX(-45deg) translateZ(${EDGE_DIST}px)` },
+  {
+    id: "tr",
+    yaw: Math.PI / 2,
+    pitch: Math.PI / 4,
+    axis: "z",
+    transform: `rotateY(90deg) rotateX(45deg) translateZ(${EDGE_DIST}px)`,
+  },
+  {
+    id: "tl",
+    yaw: -Math.PI / 2,
+    pitch: Math.PI / 4,
+    axis: "z",
+    transform: `rotateY(-90deg) rotateX(45deg) translateZ(${EDGE_DIST}px)`,
+  },
+  {
+    id: "Br",
+    yaw: Math.PI / 2,
+    pitch: -Math.PI / 4,
+    axis: "z",
+    transform: `rotateY(90deg) rotateX(-45deg) translateZ(${EDGE_DIST}px)`,
+  },
+  {
+    id: "Bl",
+    yaw: -Math.PI / 2,
+    pitch: -Math.PI / 4,
+    axis: "z",
+    transform: `rotateY(-90deg) rotateX(-45deg) translateZ(${EDGE_DIST}px)`,
+  },
 ];
 
 interface CornerPreset {
@@ -566,23 +643,55 @@ interface CornerPreset {
 
 const CORNERS: CornerPreset[] = [
   // Top corners — pitch = +ISO, αx = +ISO_DEG (CSS sy = -1 = above)
-  { id: "tfr", yaw: Math.PI / 4, pitch: ISO_PITCH,
-    transform: `rotateY(45deg) rotateX(${ISO_DEG}deg) translateZ(${CORNER_DIST}px)` },
-  { id: "tfl", yaw: -Math.PI / 4, pitch: ISO_PITCH,
-    transform: `rotateY(-45deg) rotateX(${ISO_DEG}deg) translateZ(${CORNER_DIST}px)` },
-  { id: "tbr", yaw: (3 * Math.PI) / 4, pitch: ISO_PITCH,
-    transform: `rotateY(135deg) rotateX(${ISO_DEG}deg) translateZ(${CORNER_DIST}px)` },
-  { id: "tbl", yaw: (-3 * Math.PI) / 4, pitch: ISO_PITCH,
-    transform: `rotateY(-135deg) rotateX(${ISO_DEG}deg) translateZ(${CORNER_DIST}px)` },
+  {
+    id: "tfr",
+    yaw: Math.PI / 4,
+    pitch: ISO_PITCH,
+    transform: `rotateY(45deg) rotateX(${ISO_DEG}deg) translateZ(${CORNER_DIST}px)`,
+  },
+  {
+    id: "tfl",
+    yaw: -Math.PI / 4,
+    pitch: ISO_PITCH,
+    transform: `rotateY(-45deg) rotateX(${ISO_DEG}deg) translateZ(${CORNER_DIST}px)`,
+  },
+  {
+    id: "tbr",
+    yaw: (3 * Math.PI) / 4,
+    pitch: ISO_PITCH,
+    transform: `rotateY(135deg) rotateX(${ISO_DEG}deg) translateZ(${CORNER_DIST}px)`,
+  },
+  {
+    id: "tbl",
+    yaw: (-3 * Math.PI) / 4,
+    pitch: ISO_PITCH,
+    transform: `rotateY(-135deg) rotateX(${ISO_DEG}deg) translateZ(${CORNER_DIST}px)`,
+  },
   // Bottom corners — pitch = -ISO, αx = -ISO_DEG
-  { id: "bfr", yaw: Math.PI / 4, pitch: -ISO_PITCH,
-    transform: `rotateY(45deg) rotateX(-${ISO_DEG}deg) translateZ(${CORNER_DIST}px)` },
-  { id: "bfl", yaw: -Math.PI / 4, pitch: -ISO_PITCH,
-    transform: `rotateY(-45deg) rotateX(-${ISO_DEG}deg) translateZ(${CORNER_DIST}px)` },
-  { id: "bbr", yaw: (3 * Math.PI) / 4, pitch: -ISO_PITCH,
-    transform: `rotateY(135deg) rotateX(-${ISO_DEG}deg) translateZ(${CORNER_DIST}px)` },
-  { id: "bbl", yaw: (-3 * Math.PI) / 4, pitch: -ISO_PITCH,
-    transform: `rotateY(-135deg) rotateX(-${ISO_DEG}deg) translateZ(${CORNER_DIST}px)` },
+  {
+    id: "bfr",
+    yaw: Math.PI / 4,
+    pitch: -ISO_PITCH,
+    transform: `rotateY(45deg) rotateX(-${ISO_DEG}deg) translateZ(${CORNER_DIST}px)`,
+  },
+  {
+    id: "bfl",
+    yaw: -Math.PI / 4,
+    pitch: -ISO_PITCH,
+    transform: `rotateY(-45deg) rotateX(-${ISO_DEG}deg) translateZ(${CORNER_DIST}px)`,
+  },
+  {
+    id: "bbr",
+    yaw: (3 * Math.PI) / 4,
+    pitch: -ISO_PITCH,
+    transform: `rotateY(135deg) rotateX(-${ISO_DEG}deg) translateZ(${CORNER_DIST}px)`,
+  },
+  {
+    id: "bbl",
+    yaw: (-3 * Math.PI) / 4,
+    pitch: -ISO_PITCH,
+    transform: `rotateY(-135deg) rotateX(-${ISO_DEG}deg) translateZ(${CORNER_DIST}px)`,
+  },
 ];
 
 const HIT_REST = "rgba(255,255,255,0.04)";
