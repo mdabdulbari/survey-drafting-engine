@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import type { Copc, Getter, Hierarchy } from "copc";
-import type { Origin } from "../lib/coordinate-system";
+import type { Origin, ScenePoint, SurveyPoint } from "../lib/coordinate-system";
 import type { GpuBufferPool } from "../lib/gpu-buffer-pool";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -12,6 +12,14 @@ import type { GpuBufferPool } from "../lib/gpu-buffer-pool";
 export interface NodeSlot {
   slotIndex: number;
   pointCount: number;
+}
+
+/** The point the user last clicked, in both coordinate spaces. */
+export interface PickedPoint {
+  /** Scene-space position — where the on-screen marker is drawn. */
+  scene: ScenePoint;
+  /** Survey CRS position (X east, Y north, Z elevation) — what is displayed. */
+  survey: SurveyPoint;
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────────
@@ -28,6 +36,7 @@ interface PointCloudState {
    * The pool is owned by PointCloud.tsx and disposed on canvas unmount.
    */
   gpuPool: GpuBufferPool | null;
+  pickedPoint: PickedPoint | null;
 
   setCopc: (
     projectId: string,
@@ -39,6 +48,7 @@ interface PointCloudState {
   setGpuPool: (pool: GpuBufferPool | null) => void;
   markLoaded: (nodeKey: string, slotIndex: number, pointCount: number) => void;
   markUnloaded: (nodeKey: string) => void;
+  setPickedPoint: (point: PickedPoint | null) => void;
   reset: () => void;
 }
 
@@ -55,6 +65,7 @@ const projectInitialState = {
   nodes: null,
   origin: null,
   nodeSlots: {} as Record<string, NodeSlot>,
+  pickedPoint: null as PickedPoint | null,
 };
 
 // ── Store instance ────────────────────────────────────────────────────────────
@@ -64,7 +75,15 @@ export const usePointCloudStore = create<PointCloudState>((set) => ({
   gpuPool: null,
 
   setCopc: (projectId, copc, getter, nodes, origin) =>
-    set({ projectId, copc, getter, nodes, origin, nodeSlots: {} }),
+    set({
+      projectId,
+      copc,
+      getter,
+      nodes,
+      origin,
+      nodeSlots: {},
+      pickedPoint: null,
+    }),
 
   setGpuPool: (pool) => set({ gpuPool: pool }),
 
@@ -78,6 +97,8 @@ export const usePointCloudStore = create<PointCloudState>((set) => ({
       const { [nodeKey]: _removed, ...rest } = s.nodeSlots;
       return { nodeSlots: rest };
     }),
+
+  setPickedPoint: (point) => set({ pickedPoint: point }),
 
   // reset() clears project data only — gpuPool is canvas-level and survives
   // project switches.

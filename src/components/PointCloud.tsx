@@ -17,7 +17,13 @@ import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import { useFrame, useThree } from "@react-three/fiber";
 import { usePointCloudStore } from "../store/pointCloudStore";
-import { GpuBufferPool, SLOT_COUNT, POINTS_PER_SLOT, MAX_POINTS } from "../lib/gpu-buffer-pool";
+import {
+  GpuBufferPool,
+  SLOT_COUNT,
+  POINTS_PER_SLOT,
+  MAX_POINTS,
+} from "../lib/gpu-buffer-pool";
+import { PointPicking } from "./PointPicking";
 
 // ── GPU pool initialiser ──────────────────────────────────────────────────────
 
@@ -37,13 +43,16 @@ function GpuPoolProvider() {
   return null;
 }
 
+/** Display point size in CSS px (sizeAttenuation off). Shared with picking. */
+const POINT_SIZE_PX = 2;
+
 // ── Single consolidated mesh ──────────────────────────────────────────────────
 
 function SinglePointCloudMesh() {
   const { gl, camera, size } = useThree();
-  const gpuPool     = usePointCloudStore((s) => s.gpuPool);
-  const copc        = usePointCloudStore((s) => s.copc);
-  const nodeSlots   = usePointCloudStore((s) => s.nodeSlots);
+  const gpuPool = usePointCloudStore((s) => s.gpuPool);
+  const copc = usePointCloudStore((s) => s.copc);
+  const nodeSlots = usePointCloudStore((s) => s.nodeSlots);
   const materialRef = useRef<THREE.ShaderMaterial | null>(null);
 
   // Build geometry once when the pool becomes available.
@@ -53,22 +62,37 @@ function SinglePointCloudMesh() {
     if (!gpuPool) return null;
 
     const rawGl = gl.getContext() as WebGL2RenderingContext;
-    const geom  = new THREE.BufferGeometry();
+    const geom = new THREE.BufferGeometry();
 
     // GLBufferAttribute(buffer, type, itemSize, elementSize, count)
     //   type        = FLOAT (5126)
     //   itemSize    = 3  (x, y, z components)
     //   elementSize = 4  (bytes per float)
     //   count       = MAX_POINTS
-    const posAttr = new THREE.GLBufferAttribute(gpuPool.posBuffer,   rawGl.FLOAT, 3, 4, MAX_POINTS);
-    const colAttr = new THREE.GLBufferAttribute(gpuPool.colorBuffer, rawGl.FLOAT, 3, 4, MAX_POINTS);
+    const posAttr = new THREE.GLBufferAttribute(
+      gpuPool.posBuffer,
+      rawGl.FLOAT,
+      3,
+      4,
+      MAX_POINTS,
+    );
+    const colAttr = new THREE.GLBufferAttribute(
+      gpuPool.colorBuffer,
+      rawGl.FLOAT,
+      3,
+      4,
+      MAX_POINTS,
+    );
 
     geom.setAttribute("position", posAttr);
-    geom.setAttribute("color",    colAttr);
+    geom.setAttribute("color", colAttr);
 
     // Start with 0 visible points — updated below as nodeSlots changes.
     geom.setDrawRange(0, 0);
-    geom.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), Infinity);
+    geom.boundingSphere = new THREE.Sphere(
+      new THREE.Vector3(0, 0, 0),
+      Infinity,
+    );
 
     return geom;
   }, [gpuPool, gl]);
@@ -83,7 +107,7 @@ function SinglePointCloudMesh() {
       geometry.setDrawRange(0, 0);
       return;
     }
-    const maxSlot  = Math.max(...slotIndices);
+    const maxSlot = Math.max(...slotIndices);
     const endPoint = (maxSlot + 1) * POINTS_PER_SLOT;
     geometry.setDrawRange(0, endPoint);
   }, [geometry, nodeSlots]);
@@ -92,13 +116,13 @@ function SinglePointCloudMesh() {
   const material = useMemo(() => {
     if (!gpuPool) return null;
     const mat = new THREE.PointsMaterial({
-      size: 2,
+      size: POINT_SIZE_PX,
       vertexColors: true,
       sizeAttenuation: false,
     });
     materialRef.current = mat as unknown as THREE.ShaderMaterial;
     return mat;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gpuPool, copc?.info.spacing]);
 
   // Keep spacing uniform in sync when a new project opens.
@@ -116,31 +140,35 @@ function SinglePointCloudMesh() {
 
     if (camera instanceof THREE.OrthographicCamera) {
       mat.uniforms.uOrthographic.value = 1.0;
-      mat.uniforms.uFocalLength.value  = camera.zoom;
+      mat.uniforms.uFocalLength.value = camera.zoom;
     } else {
       mat.uniforms.uOrthographic.value = 0.0;
-      const cam    = camera as THREE.PerspectiveCamera;
+      const cam = camera as THREE.PerspectiveCamera;
       const fovRad = (cam.fov * Math.PI) / 180;
-      mat.uniforms.uFocalLength.value  = size.height / (2 * Math.tan(fovRad / 2));
+      mat.uniforms.uFocalLength.value =
+        size.height / (2 * Math.tan(fovRad / 2));
     }
   });
 
   useEffect(() => {
-    return () => { if (geometry) geometry.dispose(); };
+    return () => {
+      if (geometry) geometry.dispose();
+    };
   }, [geometry]);
 
   useEffect(() => {
-    return () => { if (material) material.dispose(); };
+    return () => {
+      if (material) material.dispose();
+    };
   }, [material]);
 
   if (!geometry || !material) return null;
 
   return (
-    <points
-      geometry={geometry}
-      material={material}
-      frustumCulled={false}
-    />
+    <>
+      <points geometry={geometry} material={material} frustumCulled={false} />
+      <PointPicking geometry={geometry} pointSize={POINT_SIZE_PX} />
+    </>
   );
 }
 

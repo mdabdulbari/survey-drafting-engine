@@ -73,7 +73,7 @@ export class GpuBufferPool {
     this.gl = gl;
     const totalBytes = SLOT_COUNT * BYTES_PER_SLOT;
 
-    this.posBuffer   = allocBuffer(gl, totalBytes);
+    this.posBuffer = allocBuffer(gl, totalBytes);
     this.colorBuffer = allocBuffer(gl, totalBytes);
 
     // Initialise all position slots with NaN so unoccupied slots are invisible.
@@ -127,6 +127,24 @@ export class GpuBufferPool {
     const byteOffset = slotIndex * BYTES_PER_SLOT;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.posBuffer);
     gl.bufferSubData(gl.ARRAY_BUFFER, byteOffset, NAN_SLOT);
+    gl.bindBuffer(gl.ARRAY_BUFFER, null);
+  }
+
+  /**
+   * Read one point's position back from VRAM into `out` (length ≥ 3).
+   * Synchronous GPU→CPU read of 12 bytes — intended for user-driven picks,
+   * never per-frame use.
+   */
+  readPosition(pointIndex: number, out: Float32Array): void {
+    const { gl } = this;
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.posBuffer);
+    gl.getBufferSubData(
+      gl.ARRAY_BUFFER,
+      pointIndex * 3 * Float32Array.BYTES_PER_ELEMENT,
+      out,
+      0,
+      3,
+    );
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
   }
 
