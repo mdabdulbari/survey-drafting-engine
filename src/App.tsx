@@ -14,6 +14,7 @@ import { useWindowState } from "./hooks/useWindowState";
 import { useGlobalShortcuts } from "./hooks/useGlobalShortcuts";
 import type { AppPhase } from "./types";
 import type { ProjectMeta } from "./ipc/types";
+import { PointInfoPanel } from "./components/PointInfoPanel";
 
 function App() {
   const [projectId, setProjectId] = useState<string | null>(null);
@@ -128,6 +129,7 @@ function App() {
             {phase === "ready" && project && (
               <>
                 <HUD project={project} />
+                <PointInfoPanel />
                 {/* TODO: remove BenchmarkIPC once M5 acceptance test passes */}
                 <BenchmarkIPC projectId={project.id} />
               </>

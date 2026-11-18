@@ -60,13 +60,13 @@ export function sceneToSurvey(
 ): SurveyPoint {
   return [
     snapToGrid(scene[0] + origin[0], quant.scale[0], quant.offset[0]),
-    snapToGrid(scene[1] + origin[1], quant.scale[1], quant.offset[1]),
-    snapToGrid(scene[2] + origin[2], quant.scale[2], quant.offset[2]),
+    snapToGrid(scene[2] + origin[1], quant.scale[1], quant.offset[1]),
+    snapToGrid(scene[1] + origin[2], quant.scale[2], quant.offset[2]),
   ];
 }
 
 function snapToGrid(value: number, scale: number, offset: number): number {
   if (!(scale > 0)) return value;
 
-  return Math.round((value - offset) / scale) * scale * offset;
+  return Math.round((value - offset) / scale) * scale + offset;
 }
