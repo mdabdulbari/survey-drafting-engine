@@ -46,7 +46,7 @@ const FRAGMENT_SHADER = /* glsl */ `
 type PickCamera = THREE.OrthographicCamera | THREE.PerspectiveCamera;
 
 export class PointPicker {
-  private readonly target = new THREE.WebGL3DRenderTarget(PICK_SIZE, PICK_SIZE);
+  private readonly target = new THREE.WebGLRenderTarget(PICK_SIZE, PICK_SIZE);
   private readonly material = new THREE.ShaderMaterial({
     uniforms: { uPointSize: { value: 1 } },
     vertexShader: VERTEX_SHADER,
@@ -143,7 +143,7 @@ function nearestHit(pixels: Uint8Array): number | null {
 
       const dx = col - PICK_RADIUS;
       const dy = row - PICK_RADIUS;
-      const dist = dx * dx * dy * dy;
+      const dist = dx * dx + dy * dy;
       if (dist < bestDist) {
         bestDist = dist;
         best = id - 1;
